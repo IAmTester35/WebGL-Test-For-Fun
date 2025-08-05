@@ -1,0 +1,212 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Three.js - Portal to the Shader Realm</title>
+    <style>
+        body { margin: 0; overflow: hidden; background-color: #000; }
+        canvas { display: block; }
+    </style>
+</head>
+<body>
+    <script async src="https://unpkg.com/es-module-shims@1.3.6/dist/es-module-shims.js"></script>
+    <script type="importmap">
+    {
+        "imports": {
+            "three": "https://unpkg.com/three@0.148.0/build/three.module.js",
+            "three/addons/": "https://unpkg.com/three@0.148.0/examples/jsm/"
+        }
+    }
+    </script>
+
+    <!-- Vertex Shader cho Cổng Dịch Chuyển -->
+    <script type="x-shader/x-vertex" id="portalVertexShader">
+        varying vec2 vUv;
+        void main() {
+            vUv = uv;
+            gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+        }
+    </script>
+
+    <!-- Fragment Shader cho Cổng Dịch Chuyển (Nơi phép thuật xảy ra) -->
+    <script type="x-shader/x-fragment" id="portalFragmentShader">
+        uniform float uTime;
+        uniform vec3 uColorStart;
+        uniform vec3 uColorEnd;
+        varying vec2 vUv;
+
+        // Hàm noise 2D đơn giản để tạo hiệu ứng gợn sóng
+        float random(vec2 st) {
+            return fract(sin(dot(st.xy, vec2(12.9898, 78.233))) * 43758.5453123);
+        }
+
+        // Hàm noise FBM (Fractal Brownian Motion) để tạo hiệu ứng phức tạp hơn
+        float noise(vec2 st) {
+            vec2 i = floor(st);
+            vec2 f = fract(st);
+
+            float a = random(i);
+            float b = random(i + vec2(1.0, 0.0));
+            float c = random(i + vec2(0.0, 1.0));
+            float d = random(i + vec2(1.0, 1.0));
+
+            vec2 u = f * f * (3.0 - 2.0 * f);
+            return mix(a, b, u.x) + (c - a) * u.y * (1.0 - u.x) + (d - b) * u.y * u.x;
+        }
+
+        void main() {
+            // Chuyển tọa độ uv về trung tâm (từ -0.5 -> 0.5)
+            vec2 displacedUv = vUv - 0.5;
+
+            // Hiệu ứng xoáy: Xoay các điểm ảnh dựa trên khoảng cách tới tâm và thời gian
+            float distanceToCenter = length(displacedUv);
+            float angle = atan(displacedUv.y, displacedUv.x);
+            angle += uTime * 0.3 + (1.0 / (distanceToCenter * 20.0)); // Xoáy mạnh hơn ở gần tâm
+            
+            // Tái tạo lại tọa độ uv sau khi xoay
+            displacedUv.x = cos(angle) * distanceToCenter;
+            displacedUv.y = sin(angle) * distanceToCenter;
+            
+            // Áp dụng thêm noise để tạo hiệu ứng "bất ổn"
+            float n = noise((displacedUv + 0.5) * 3.0); // scale noise
+            displacedUv += n * 0.1;
+
+            // Tạo màu sắc dựa trên tọa độ uv đã biến đổi
+            float mixValue = length(displacedUv * 2.0); // 0 ở tâm, 1 ở rìa
+            vec3 color = mix(uColorStart, uColorEnd, mixValue);
+
+            // Làm mờ dần ở rìa cổng để tạo hiệu ứng mềm mại
+            float alpha = 1.0 - smoothstep(0.4, 0.5, distanceToCenter);
+
+            gl_FragColor = vec4(color, alpha);
+        }
+    </script>
+
+    <script type="module">
+        import * as THREE from 'three';
+        import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+        import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
+        import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
+        import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
+
+        // --- 1. Thiết lập cơ bản ---
+        const scene = new THREE.Scene();
+        const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+        camera.position.set(0, 3, 10);
+
+        const renderer = new THREE.WebGLRenderer({ antialias: true });
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+        renderer.setClearColor(0x000000);
+        // Bật tính năng bóng đổ!
+        renderer.shadowMap.enabled = true;
+        renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+        document.body.appendChild(renderer.domElement);
+
+        const controls = new OrbitControls(camera, renderer.domElement);
+        controls.enableDamping = true;
+
+        // --- 2. Tạo hình học và vật liệu ---
+
+        // Sàn nhà để nhận bóng đổ và phản chiếu ánh sáng
+        const floorGeometry = new THREE.PlaneGeometry(50, 50);
+        const floorMaterial = new THREE.MeshStandardMaterial({
+            color: 0x222222,
+            metalness: 0.8,
+            roughness: 0.4
+        });
+        const floor = new THREE.Mesh(floorGeometry, floorMaterial);
+        floor.rotation.x = -Math.PI / 2;
+        floor.receiveShadow = true; // Rất quan trọng!
+        scene.add(floor);
+
+        // Khung của cổng dịch chuyển
+        const portalFrameGeometry = new THREE.TorusGeometry(3, 0.3, 16, 100);
+        const portalFrameMaterial = new THREE.MeshStandardMaterial({
+            color: 0xeeeeff,
+            metalness: 0.9,
+            roughness: 0.2,
+            emissive: 0x4040ff, // Tự phát sáng một chút
+            emissiveIntensity: 0.5
+        });
+        const portalFrame = new THREE.Mesh(portalFrameGeometry, portalFrameMaterial);
+        portalFrame.position.y = 3.5;
+        portalFrame.rotation.x = Math.PI / 2;
+        portalFrame.castShadow = true;
+        scene.add(portalFrame);
+
+        // Bề mặt cổng dịch chuyển - Nơi sử dụng SHADER TÙY CHỈNH
+        const portalShaderMaterial = new THREE.ShaderMaterial({
+            uniforms: {
+                uTime: { value: 0 },
+                uColorStart: { value: new THREE.Color('#ffffff') },
+                uColorEnd: { value: new THREE.Color('#3300ff') }
+            },
+            vertexShader: document.getElementById('portalVertexShader').textContent,
+            fragmentShader: document.getElementById('portalFragmentShader').textContent,
+            transparent: true,
+            side: THREE.DoubleSide
+        });
+        const portalSurface = new THREE.Mesh(
+            new THREE.CircleGeometry(3, 64),
+            portalShaderMaterial
+        );
+        portalSurface.position.copy(portalFrame.position);
+        scene.add(portalSurface);
+
+        // --- 3. Ánh sáng ---
+        
+        // Ánh sáng phát ra từ cổng
+        const portalLight = new THREE.PointLight(0x6060ff, 3, 20, 2);
+        portalLight.position.set(0, 3.5, 0.5); // Đặt ngay trước cổng
+        portalLight.castShadow = true; // Ánh sáng này sẽ tạo bóng đổ
+        portalLight.shadow.mapSize.width = 1024;
+        portalLight.shadow.mapSize.height = 1024;
+        scene.add(portalLight);
+
+        // Ánh sáng môi trường nhẹ để các vùng tối không bị đen hoàn toàn
+        const ambientLight = new THREE.AmbientLight(0xffffff, 0.1);
+        scene.add(ambientLight);
+
+        // --- 4. Hậu xử lý (Post-processing) với hiệu ứng BLOOM ---
+        const renderScene = new RenderPass(scene, camera);
+        const bloomPass = new UnrealBloomPass(new THREE.Vector2(window.innerWidth, window.innerHeight), 1.5, 0.4, 0.85);
+        bloomPass.threshold = 0; // Ngưỡng để bắt đầu phát sáng
+        bloomPass.strength = 1.8;  // Cường độ phát sáng
+        bloomPass.radius = 0.8;    // Bán kính vùng phát sáng
+
+        const composer = new EffectComposer(renderer);
+        composer.addPass(renderScene);
+        composer.addPass(bloomPass);
+
+        // --- 5. Vòng lặp Animation ---
+        const clock = new THREE.Clock();
+        function animate() {
+            const elapsedTime = clock.getElapsedTime();
+
+            // Cập nhật uniform 'uTime' trong shader để tạo animation
+            portalShaderMaterial.uniforms.uTime.value = elapsedTime;
+
+            // Làm cho ánh sáng từ cổng nhấp nháy một chút
+            portalLight.intensity = Math.sin(elapsedTime * 2.0) * 0.5 + 2.5;
+
+            controls.update();
+            
+            // Render bằng composer để áp dụng hiệu ứng hậu xử lý
+            composer.render();
+
+            requestAnimationFrame(animate);
+        }
+
+        // Xử lý khi resize cửa sổ
+        window.addEventListener('resize', () => {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            composer.setSize(window.innerWidth, window.innerHeight);
+            renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+        });
+
+        animate();
+    </script>
+</body>
+</html>

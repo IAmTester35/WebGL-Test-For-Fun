@@ -1,0 +1,204 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Sức mạnh của WebGL - Thiên hà Hạt</title>
+    <style>
+        body { margin: 0; overflow: hidden; background: #000; }
+        canvas { display: block; }
+    </style>
+</head>
+<body>
+<canvas id="glcanvas"></canvas>
+
+<script id="vertex-shader" type="x-shader/x-vertex">
+    // Thuộc tính (attribute) cho mỗi hạt, chỉ được thiết lập một lần
+    attribute vec2 a_initialPosition;
+    attribute vec2 a_velocity;
+
+    // Biến đồng nhất (uniform) được cập nhật mỗi khung hình từ JavaScript
+    uniform float u_time;
+    uniform vec2 u_mousePos;
+    uniform vec2 u_resolution;
+    
+    // Biến truyền cho Fragment Shader
+    varying float v_brightness;
+
+    void main() {
+        // --- Tương tác với chuột ---
+        // Tính toán khoảng cách từ hạt đến con trỏ chuột
+        // Tọa độ chuột (u_mousePos) đang ở dạng pixel, cần chuyển về không gian -1 đến 1
+        vec2 mouseNormalized = (u_mousePos / u_resolution) * 2.0 - 1.0;
+        mouseNormalized.y = -mouseNormalized.y; // Invert Y
+        
+        vec2 currentPosition = a_initialPosition + a_velocity * u_time * 0.1;
+        
+        // Tính vector từ hạt đến chuột
+        vec2 fromMouse = currentPosition - mouseNormalized;
+        float distToMouse = length(fromMouse);
+        
+        // Nếu chuột ở gần, đẩy hạt ra xa. Lực đẩy giảm dần theo khoảng cách.
+        // Đây là hiệu ứng chính tạo nên sự "kỳ diệu"
+        float repulsionForce = min(0.5 / (distToMouse * distToMouse), 5.0);
+        currentPosition += normalize(fromMouse) * repulsionForce * 0.05;
+
+        // --- Tạo chuyển động xoáy tự nhiên ---
+        // Thêm một chút chuyển động xoáy tròn để trông giống thiên hà hơn
+        float angle = atan(currentPosition.y, currentPosition.x) + u_time * 0.05;
+        float radius = length(currentPosition);
+        currentPosition.x = cos(angle) * radius;
+        currentPosition.y = sin(angle) * radius;
+
+        // --- Thiết lập đầu ra ---
+        gl_Position = vec4(currentPosition, 0.0, 1.0);
+
+        // Kích thước của hạt
+        gl_PointSize = 2.0;
+        
+        // Độ sáng dựa trên khoảng cách tới chuột, để tạo hiệu ứng "bùng nổ"
+        v_brightness = max(0.0, 1.0 - distToMouse * 2.0);
+    }
+</script>
+
+<script id="fragment-shader" type="x-shader/x-fragment">
+    precision mediump float;
+    
+    varying float v_brightness;
+    
+    void main() {
+        // Màu cơ bản của hạt là màu vàng nhạt
+        vec3 baseColor = vec3(1.0, 0.9, 0.7);
+        // Màu khi có tương tác là màu trắng xanh sáng
+        vec3 highlightColor = vec3(0.8, 1.0, 1.0);
+        
+        // Trộn màu dựa trên độ sáng (khoảng cách tới chuột)
+        vec3 finalColor = mix(baseColor, highlightColor, v_brightness);
+        
+        // Thiết lập màu cuối cùng với độ trong suốt để tạo hiệu ứng chồng chéo đẹp mắt
+        gl_FragColor = vec4(finalColor, 0.8);
+    }
+</script>
+
+<script>
+    const canvas = document.getElementById('glcanvas');
+    const gl = canvas.getContext('webgl');
+
+    if (!gl) {
+        alert("Trình duyệt của bạn không hỗ trợ WebGL. Thật đáng tiếc!");
+    }
+
+    const vertexShaderSource = document.getElementById('vertex-shader').text;
+    const fragmentShaderSource = document.getElementById('fragment-shader').text;
+
+    function createShader(gl, type, source) {
+        const shader = gl.createShader(type);
+        gl.shaderSource(shader, source);
+        gl.compileShader(shader);
+        if (!gl.getShaderParameter(shader, gl.COMPILE_STATUS)) {
+            console.error('Lỗi biên dịch shader:', gl.getShaderInfoLog(shader));
+            gl.deleteShader(shader);
+            return null;
+        }
+        return shader;
+    }
+
+    function createProgram(gl, vertexShader, fragmentShader) {
+        const program = gl.createProgram();
+        gl.attachShader(program, vertexShader);
+        gl.attachShader(program, fragmentShader);
+        gl.linkProgram(program);
+        if (!gl.getProgramParameter(program, gl.LINK_STATUS)) {
+            console.error('Lỗi liên kết program:', gl.getProgramInfoLog(program));
+            gl.deleteProgram(program);
+            return null;
+        }
+        return program;
+    }
+
+    const vertexShader = createShader(gl, gl.VERTEX_SHADER, vertexShaderSource);
+    const fragmentShader = createShader(gl, gl.FRAGMENT_SHADER, fragmentShaderSource);
+    const program = createProgram(gl, vertexShader, fragmentShader);
+
+    // Lấy "địa chỉ" của các biến trong shader
+    const initialPositionLocation = gl.getAttribLocation(program, 'a_initialPosition');
+    const velocityLocation = gl.getAttribLocation(program, 'a_velocity');
+    const timeLocation = gl.getUniformLocation(program, 'u_time');
+    const mousePosLocation = gl.getUniformLocation(program, 'u_mousePos');
+    const resolutionLocation = gl.getUniformLocation(program, 'u_resolution');
+
+    // === Đây là phần cốt lõi tạo ra số lượng hạt khổng lồ ===
+    const NUM_PARTICLES = 250000; // Thử tăng con số này lên nếu máy bạn đủ mạnh!
+    const positions = new Float32Array(NUM_PARTICLES * 2);
+    const velocities = new Float32Array(NUM_PARTICLES * 2);
+
+    for (let i = 0; i < NUM_PARTICLES; i++) {
+        // Phân bố các hạt theo hình đĩa tròn để giống thiên hà
+        const radius = Math.sqrt(Math.random()) * 0.8;
+        const angle = Math.random() * Math.PI * 2;
+        positions[i * 2] = Math.cos(angle) * radius;     // x
+        positions[i * 2 + 1] = Math.sin(angle) * radius; // y
+
+        // Vận tốc ban đầu nhỏ, ngẫu nhiên
+        velocities[i * 2] = (Math.random() - 0.5) * 0.1;
+        velocities[i * 2 + 1] = (Math.random() - 0.5) * 0.1;
+    }
+
+    // Tạo và nạp dữ liệu vào buffer trên GPU
+    const positionBuffer = gl.createBuffer();
+    gl.bindBuffer(gl.ARRAY_BUFFER, positionBuffer);
+    gl.bufferData(gl.ARRAY_BUFFER, positions, gl.STATIC_DRAW);
+
+    const velocityBuffer = gl.createBuffer();
+    gl.bindBuffer(gl.ARRAY_BUFFER, velocityBuffer);
+    gl.bufferData(gl.ARRAY_BUFFER, velocities, gl.STATIC_DRAW);
+    
+    // Theo dõi vị trí chuột
+    const mousePos = { x: window.innerWidth / 2, y: window.innerHeight / 2 };
+    window.addEventListener('mousemove', e => {
+        mousePos.x = e.clientX;
+        mousePos.y = e.clientY;
+    });
+
+    // Vòng lặp render
+    function render(time) {
+        time *= 0.0005; // Chuyển sang giây
+
+        // Resize canvas cho vừa với cửa sổ
+        canvas.width = window.innerWidth;
+        canvas.height = window.innerHeight;
+        gl.viewport(0, 0, gl.canvas.width, gl.canvas.height);
+
+        // Xóa màn hình
+        gl.clearColor(0, 0, 0, 1);
+        gl.clear(gl.COLOR_BUFFER_BIT);
+
+        // Bật blending để các hạt chồng lên nhau sáng hơn
+        gl.enable(gl.BLEND);
+        gl.blendFunc(gl.SRC_ALPHA, gl.ONE); // Additive blending
+
+        gl.useProgram(program);
+
+        // Cung cấp dữ liệu vị trí cho shader
+        gl.enableVertexAttribArray(initialPositionLocation);
+        gl.bindBuffer(gl.ARRAY_BUFFER, positionBuffer);
+        gl.vertexAttribPointer(initialPositionLocation, 2, gl.FLOAT, false, 0, 0);
+        
+        // Cung cấp dữ liệu vận tốc cho shader
+        gl.enableVertexAttribArray(velocityLocation);
+        gl.bindBuffer(gl.ARRAY_BUFFER, velocityBuffer);
+        gl.vertexAttribPointer(velocityLocation, 2, gl.FLOAT, false, 0, 0);
+
+        // Cập nhật các biến uniform
+        gl.uniform1f(timeLocation, time);
+        gl.uniform2f(mousePosLocation, mousePos.x, mousePos.y);
+        gl.uniform2f(resolutionLocation, gl.canvas.width, gl.canvas.height);
+
+        // Lệnh vẽ!
+        gl.drawArrays(gl.POINTS, 0, NUM_PARTICLES);
+
+        requestAnimationFrame(render);
+    }
+
+    requestAnimationFrame(render);
+</script>
+</body>
+</html>

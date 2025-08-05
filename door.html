@@ -1,0 +1,166 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Three.js - Giao hưởng Ngân Hà (Final - Đã sửa lỗi)</title>
+    <style>
+        body { margin: 0; overflow: hidden; background-color: #000000; }
+        canvas { display: block; }
+        #info {
+            position: absolute;
+            top: 10px;
+            width: 100%;
+            text-align: center;
+            color: #fff;
+            font-family: monospace;
+            z-index: 100;
+            display: block;
+            text-shadow: 0 0 5px #00ffff;
+        }
+    </style>
+</head>
+<body>
+    <div id="info">Giao hưởng Ngân Hà (Final)<br />Shader đa lớp: Tinh vân + Sao thủ tục + Bụi tối</div>
+    <script async src="https://unpkg.com/es-module-shims@1.3.6/dist/es-module-shims.js"></script>
+    <script type="importmap">
+    {
+        "imports": {
+            "three": "https://unpkg.com/three@0.148.0/build/three.module.js",
+            "three/addons/": "https://unpkg.com/three@0.148.0/examples/jsm/"
+        }
+    }
+    </script>
+    
+    <!-- Các shader giữ nguyên -->
+    <script type="x-shader/x-fragment" id="computeShaderPosition">uniform float delta;void main(){vec2 uv=gl_FragCoord.xy/resolution.xy;vec4 p=texture2D(texturePosition,uv);vec4 v=texture2D(textureVelocity,uv);p.xyz+=v.xyz*delta;gl_FragColor=p;}</script>
+    <script type="x-shader/x-fragment" id="computeShaderVelocity">#define G 800.0
+#define MAX_BODIES 10
+uniform float delta;uniform vec4 bodies[MAX_BODIES];uniform int numBodies;void main(){vec2 uv=gl_FragCoord.xy/resolution.xy;vec4 p=texture2D(texturePosition,uv);vec4 v=texture2D(textureVelocity,uv);vec3 a=vec3(0.0);for(int i=0;i<MAX_BODIES;i++){if(i>=numBodies)break;vec3 bp=bodies[i].xyz;float bm=bodies[i].w;vec3 tb=bp-p.xyz;float ds=dot(tb,tb);float soft=25.0;float f=(G*bm)/(ds+soft);a+=normalize(tb)*f;}
+v.xyz+=a*delta;gl_FragColor=v;}</script>
+    <script type="x-shader/x-vertex" id="particleVertexShader">uniform sampler2D texturePosition;uniform sampler2D textureVelocity;uniform float uCameraDistance;varying vec3 vColor;void main(){vec4 pos=texture2D(texturePosition,uv);vec4 vel=texture2D(textureVelocity,uv);float speed=length(vel.xyz);vColor=mix(vec3(0.1,0.2,0.8),vec3(1.0,1.0,0.8),min(speed/150.0,1.0));vec4 mvPosition=modelViewMatrix*pos;gl_Position=projectionMatrix*mvPosition;gl_PointSize=1.5*(uCameraDistance/-mvPosition.z);}</script>
+    <script type="x-shader/x-fragment" id="particleFragmentShader">varying vec3 vColor;void main(){float s=1.0-(length(gl_PointCoord-0.5)*2.0);if(s<0.0)discard;gl_FragColor=vec4(vColor*s,s);}</script>
+    <script type="x-shader/x-vertex" id="galaxyVertexShader">
+        varying vec3 vWorldPosition;
+        void main() {
+            vec4 worldPosition = modelMatrix * vec4(position, 1.0);
+            vWorldPosition = worldPosition.xyz;
+            gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+        }
+    </script>
+    <script type="x-shader/x-fragment" id="galaxyFragmentShader">
+        uniform float uTime;
+        varying vec3 vWorldPosition;
+
+        // Hàm noise Simplex chuẩn
+        vec3 mod289(vec3 x){return x-floor(x*(1./289.))*289.;} vec4 mod289(vec4 x){return x-floor(x*(1./289.))*289.;} vec4 permute(vec4 x){return mod289(((x*34.)+1.)*x);} vec4 taylorInvSqrt(vec4 r){return 1.79284291400159-0.85373472095314*r;}
+        float snoise(vec3 v){const vec2 C=vec2(1./6.,1./3.);const vec4 D=vec4(0.,.5,1.,2.);vec3 i=floor(v+dot(v,C.yyy));vec3 x0=v-i+dot(i,C.xxx);vec3 g=step(x0.yzx,x0.xyz);vec3 l=1.-g;vec3 i1=min(g.xyz,l.zxy);vec3 i2=max(g.xyz,l.zxy);vec3 x1=x0-i1+C.xxx;vec3 x2=x0-i2+C.yyy;vec3 x3=x0-D.yyy;i=mod289(i);vec4 p=permute(permute(i.y+vec4(0.,i1.y,i2.y,1.))+i.x+vec4(0.,i1.x,i2.x,1.));float n_=.142857142857;vec3 ns=n_*D.wyz-D.xzx;vec4 j=p-49.*floor(p*ns.z*ns.z);vec4 x_=floor(j*ns.z);vec4 y_=floor(j-7.*x_);vec4 x=x_*ns.x+ns.yyyy;vec4 y=y_*ns.x+ns.yyyy;vec4 h=1.-abs(x)-abs(y);vec4 b0=vec4(x.xy,y.xy);vec4 b1=vec4(x.zw,y.zw);vec4 s0=floor(b0)*2.+1.;vec4 s1=floor(b1)*2.+1.;vec4 sh=-step(h,vec4(0.));vec4 a0=b0.xzyw+s0.xzyw*sh.xxyy;vec4 a1=b1.xzyw+s1.xzyw*sh.zzww;vec3 p0=vec3(a0.xy,h.x);vec3 p1=vec3(a0.zw,h.y);vec3 p2=vec3(a1.xy,h.z);vec3 p3=vec3(a1.zw,h.w);vec4 norm=taylorInvSqrt(vec4(dot(p0,p0),dot(p1,p1),dot(p2,p2),dot(p3,p3)));p0*=norm.x;p1*=norm.y;p2*=norm.z;p3*=norm.w;vec4 m=max(.6-vec4(dot(x0,x0),dot(x1,x1),dot(x2,x2),dot(x3,x3)),0.);m=m*m;return 42.*dot(m*m,vec4(dot(p0,x0),dot(p1,x1),dot(p2,x2),dot(p3,x3)));}
+
+        float fbm(vec3 p) {
+            float value = 0.0;
+            float amplitude = 0.5;
+            for (int i = 0; i < 6; i++) {
+                value += amplitude * snoise(p);
+                p *= 2.0;
+                amplitude *= 0.5;
+            }
+            return value;
+        }
+
+        void main() {
+            // --- LỚP 1: NGUỒN SÁNG (TINH VÂN + SAO) ---
+            vec3 nebulaPos = vWorldPosition * 0.002 + uTime * 0.01;
+            float nebulaValue = fbm(nebulaPos);
+            nebulaValue = (nebulaValue + 1.0) * 0.5; 
+            nebulaValue = pow(nebulaValue, 2.5);
+
+            vec3 starPos = vWorldPosition * 0.3;
+            float starValue = fbm(starPos);
+            starValue = smoothstep(0.8, 1.0, starValue);
+            starValue *= smoothstep(0.0, 1.0, snoise(starPos * 0.5 + uTime * 0.5));
+
+            vec3 lightColor = mix(vec3(0.15, 0.1, 0.4), vec3(0.8, 0.9, 1.0), nebulaValue);
+            lightColor += vec3(starValue * 0.8);
+
+            // --- LỚP 2: MẶT NẠ BỤI TỐI ---
+            vec3 dustPos = vWorldPosition * 0.004 + uTime * 0.005;
+            float dustMask = fbm(dustPos + 20.0);
+            dustMask = (dustMask + 1.0) * 0.5;
+            dustMask = 1.0 - pow(dustMask, 2.0);
+            
+            float y_normalized = abs(vWorldPosition.y) / 3000.0; 
+            float horizontalBand = 1.0 - pow(y_normalized, 0.25);
+            dustMask *= horizontalBand;
+            
+            // --- KẾT HỢP ---
+            float masterBrightness = 2.5;
+            vec3 finalColor = lightColor * dustMask * masterBrightness;
+            float finalAlpha = (nebulaValue * 0.5 + starValue) * dustMask * masterBrightness;
+            
+            float edgeFade = 1.0 - smoothstep(2800.0, 3000.0, length(vWorldPosition));
+            
+            gl_FragColor = vec4(finalColor * edgeFade, finalAlpha * edgeFade);
+        }
+    </script>
+    <script type="module">
+        import * as THREE from 'three';
+        import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+        import { GPUComputationRenderer } from 'three/addons/misc/GPUComputationRenderer.js';
+        import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
+        import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
+        import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
+        
+        const scene = new THREE.Scene();
+        const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 5000);
+        camera.position.set(0, 100, 350); 
+        const renderer = new THREE.WebGLRenderer({ antialias: true });
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+        document.body.appendChild(renderer.domElement);
+        const controls = new OrbitControls(camera, renderer.domElement);
+        controls.enableDamping = true;
+        controls.minDistance = 10;
+        controls.maxDistance = 2000;
+        const MAX_BODIES = 10;
+        const celestialBodies = [ { name: 'Sun', color: 0xffe484, mass: 1000, radius: 20 }, { name: 'Mercury', color: 0xaaaaaa, mass: 1, radius: 2, dist: 50, speed: 1.6 }, { name: 'Venus', color: 0xffd700, mass: 10, radius: 4, dist: 80, speed: 1.17 }, { name: 'Earth', color: 0x0077ff, mass: 10, radius: 4, dist: 120, speed: 1.0 }, { name: 'Mars', color: 0xff4500, mass: 5, radius: 3, dist: 180, speed: 0.8 }, { name: 'Jupiter', color: 0xffa500, mass: 400, radius: 10, dist: 280, speed: 0.43 }, { name: 'Saturn', color: 0xf0e68c, mass: 300, radius: 8, dist: 380, speed: 0.32 }, { name: 'Uranus', color: 0xadd8e6, mass: 50, radius: 6, dist: 460, speed: 0.22 }, { name: 'Neptune', color: 0x0000ff, mass: 50, radius: 6, dist: 520, speed: 0.18 }, ];
+        const bodyMeshes = [];
+        celestialBodies.forEach(body => { const geo = new THREE.SphereGeometry(body.radius, 32, 32); const mat = (body.name === 'Sun') ? new THREE.MeshBasicMaterial({ color: body.color, toneMapped: false }) : new THREE.MeshStandardMaterial({ color: body.color, roughness: 0.8 }); const mesh = new THREE.Mesh(geo, mat); if (body.name !== 'Sun') { const angle = Math.random() * Math.PI * 2; mesh.position.set(Math.cos(angle) * body.dist, 0, Math.sin(angle) * body.dist); } scene.add(mesh); bodyMeshes.push(mesh); });
+        const sunLight = new THREE.PointLight(0xffffff, 2.5, 3000, 1.5); scene.add(sunLight); scene.add(new THREE.AmbientLight(0xffffff, 0.1));
+        
+        const galaxyGeometry = new THREE.SphereGeometry(3000, 64, 64);
+        const galaxyMaterial = new THREE.ShaderMaterial({ 
+            vertexShader: document.getElementById('galaxyVertexShader').textContent, 
+            fragmentShader: document.getElementById('galaxyFragmentShader').textContent, 
+            uniforms: { uTime: { value: 0 } }, 
+            side: THREE.BackSide, 
+            transparent: true, 
+            // SỬA LỖI TẠI ĐÂY: Thay đổi blending mode
+            blending: THREE.NormalBlending, 
+            depthWrite: false, 
+        });
+        const galaxy = new THREE.Mesh(galaxyGeometry, galaxyMaterial); 
+        scene.add(galaxy);
+        
+        const WIDTH = 256; let gpuCompute, positionVariable, velocityVariable, velocityUniforms;
+        (function initGpuCompute() { gpuCompute = new GPUComputationRenderer(WIDTH, WIDTH, renderer); const dtPosition = gpuCompute.createTexture(); const dtVelocity = gpuCompute.createTexture(); const posArray = dtPosition.image.data; const velArray = dtVelocity.image.data; for (let i = 0; i < posArray.length; i += 4) { const r = Math.random() * 600 + 30; const a = Math.random() * Math.PI * 2; const z = (Math.random() - 0.5) * 20; posArray[i] = Math.cos(a) * r; posArray[i + 1] = z; posArray[i + 2] = Math.sin(a) * r; posArray[i + 3] = Math.random(); const os = Math.sqrt(800.0 / r); velArray[i] = -Math.sin(a) * os * 0.8; velArray[i + 1] = 0; velArray[i + 2] = Math.cos(a) * os * 0.8; velArray[i + 3] = Math.random(); }
+        positionVariable = gpuCompute.addVariable("texturePosition", document.getElementById('computeShaderPosition').textContent, dtPosition); velocityVariable = gpuCompute.addVariable("textureVelocity", document.getElementById('computeShaderVelocity').textContent, dtVelocity); gpuCompute.setVariableDependencies(positionVariable, [positionVariable, velocityVariable]); gpuCompute.setVariableDependencies(velocityVariable, [positionVariable, velocityVariable]);
+        velocityUniforms = velocityVariable.material.uniforms; const positionUniforms = positionVariable.material.uniforms; velocityUniforms['delta'] = { value: 0.0 }; positionUniforms['delta'] = { value: 0.0 }; const bodyDataInitial = Array.from({ length: MAX_BODIES }, () => new THREE.Vector4()); velocityUniforms['bodies'] = { value: bodyDataInitial }; velocityUniforms['numBodies'] = { value: celestialBodies.length }; const error = gpuCompute.init(); if (error) console.error(error); })();
+        
+        const particleGeometry = new THREE.BufferGeometry(); const uvs = new Float32Array(WIDTH * WIDTH * 2); for (let i = 0; i < WIDTH; i++) for (let j = 0; j < WIDTH; j++) { const k = i + j * WIDTH; uvs[k * 2] = i / (WIDTH - 1); uvs[k * 2 + 1] = j / (WIDTH - 1); }
+        particleGeometry.setAttribute('uv', new THREE.BufferAttribute(uvs, 2)); const particleMaterial = new THREE.ShaderMaterial({ uniforms: { texturePosition: { value: null }, textureVelocity: { value: null }, uCameraDistance: { value: 0 } }, vertexShader: document.getElementById('particleVertexShader').textContent, fragmentShader: document.getElementById('particleFragmentShader').textContent, blending: THREE.AdditiveBlending, transparent: true, depthWrite: false });
+        const particles = new THREE.Points(particleGeometry, particleMaterial); scene.add(particles);
+        
+        const renderScene = new RenderPass(scene, camera); const bloomPass = new UnrealBloomPass(new THREE.Vector2(window.innerWidth, window.innerHeight), 1.5, 0.4, 0.85); bloomPass.threshold = 0.0; bloomPass.strength = 1.5; bloomPass.radius = 0.5;
+        const composer = new EffectComposer(renderer); composer.addPass(renderScene); composer.addPass(bloomPass);
+        
+        const clock = new THREE.Clock();
+        function animate() { const delta = clock.getDelta(); const elapsedTime = clock.getElapsedTime(); controls.update();
+        celestialBodies.forEach((body, i) => { if (i === 0) return; const mesh = bodyMeshes[i]; mesh.position.x = Math.cos(elapsedTime * body.speed * 0.5) * body.dist; mesh.position.z = Math.sin(elapsedTime * body.speed * 0.5) * body.dist; });
+        galaxyMaterial.uniforms.uTime.value = elapsedTime;
+        const bodyDataArray = velocityUniforms.bodies.value; celestialBodies.forEach((body, i) => { bodyDataArray[i].set(bodyMeshes[i].position.x, bodyMeshes[i].position.y, bodyMeshes[i].position.z, body.mass); }); velocityUniforms.delta.value = delta;
+        gpuCompute.compute();
+        particleMaterial.uniforms.texturePosition.value = gpuCompute.getCurrentRenderTarget(positionVariable).texture; particleMaterial.uniforms.textureVelocity.value = gpuCompute.getCurrentRenderTarget(velocityVariable).texture; particleMaterial.uniforms.uCameraDistance.value = camera.position.length();
+        composer.render(); requestAnimationFrame(animate); }
+        window.addEventListener('resize', () => { camera.aspect = window.innerWidth / window.innerHeight; camera.updateProjectionMatrix(); renderer.setSize(window.innerWidth, window.innerHeight); composer.setSize(window.innerWidth, window.innerHeight); });
+        animate();
+    </script>
+</body>
+</html>
