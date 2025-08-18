@@ -1,0 +1,210 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Three.js Tech Showcase: Smooth Controls</title>
+    <style>
+        body { margin: 0; overflow: hidden; background-color: #000; }
+        canvas { display: block; }
+    </style>
+</head>
+<body>
+    <script type="importmap">
+        {
+            "imports": {
+                "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+                "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
+            }
+        }
+    </script>
+
+    <script type="module">
+        import * as THREE from 'three';
+        import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+        import { RGBELoader } from 'three/addons/loaders/RGBELoader.js';
+        import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
+        import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
+        import { SSAOPass } from 'three/addons/postprocessing/SSAOPass.js';
+        import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
+
+        let scene, camera, renderer, controls, composer;
+        let phone, notifications = [], sceneContainer; // <<< SỬA LỖI: Thêm sceneContainer
+        let mouse = new THREE.Vector2();
+
+        function init() {
+            // 1. --- SCENE & MÔI TRƯỜNG ---
+            scene = new THREE.Scene();
+            
+            // <<< SỬA LỖI: Tạo một group để chứa mọi đối tượng
+            sceneContainer = new THREE.Group();
+            scene.add(sceneContainer);
+
+            // 2. --- CAMERA & RENDERER ---
+            camera = new THREE.PerspectiveCamera(50, window.innerWidth / window.innerHeight, 0.1, 100);
+            camera.position.set(0, 0, 20);
+
+            renderer = new THREE.WebGLRenderer({ antialias: true });
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+            renderer.toneMapping = THREE.ACESFilmicToneMapping;
+            renderer.outputEncoding = THREE.sRGBEncoding;
+            document.body.appendChild(renderer.domElement);
+
+            // 3. --- MÔI TRƯỜNG PHẢN CHIẾU (HDRI) ---
+            const pmremGenerator = new THREE.PMREMGenerator(renderer);
+            pmremGenerator.compileEquirectangularShader();
+            new RGBELoader()
+                .setDataType(THREE.HalfFloatType)
+                .load('https://dl.polyhaven.org/file/ph-assets/HDRIs/hdr/1k/aerodynamics_workshop_1k.hdr', (texture) => {
+                    const envMap = pmremGenerator.fromEquirectangular(texture).texture;
+                    scene.environment = envMap;
+                    texture.dispose();
+                    pmremGenerator.dispose();
+                });
+
+            // 4. --- ĐIỀU KHIỂN ---
+            controls = new OrbitControls(camera, renderer.domElement);
+            controls.enableDamping = true;
+            controls.dampingFactor = 0.04;
+            controls.minDistance = 10;
+            controls.maxDistance = 40;
+            controls.autoRotate = true;
+            controls.autoRotateSpeed = 0.2;
+            // <<< SỬA LỖI (Tùy chọn): Thêm giới hạn góc nhìn để trải nghiệm mượt hơn
+            controls.minPolarAngle = Math.PI * 0.1; // Ngăn không cho nhìn thẳng từ dưới lên
+            controls.maxPolarAngle = Math.PI * 0.9; // Ngăn không cho nhìn thẳng từ trên xuống
+
+            // 5. --- ĐIỆN THOẠI (VẬT LIỆU CAO CẤP) ---
+            const phoneGeometry = new THREE.BoxGeometry(4.5, 9, 0.5, 1, 1, 1);
+            const phoneMaterial = new THREE.MeshPhysicalMaterial({
+                color: 0xffffff,
+                metalness: 0,
+                roughness: 0,
+                transmission: 1.0, 
+                ior: 1.5, 
+                thickness: 0.8,
+                clearcoat: 1.0,
+                clearcoatRoughness: 0.1,
+            });
+            phone = new THREE.Mesh(phoneGeometry, phoneMaterial);
+            phone.rotation.set(-0.1, -0.2, 0);
+            sceneContainer.add(phone); // <<< SỬA LỖI: Thêm vào sceneContainer thay vì scene
+
+            // 6. --- DẢI MÀU / THÔNG BÁO ---
+            const notificationColors = [0xff6b6b, 0x4ecdc4, 0x45b7d1, 0xf7d154, 0x9370db, 0x32cd32];
+            const baseGeometry = new THREE.BoxGeometry(1, 1, 1);
+
+            for (let i = 0; i < 80; i++) {
+                // ... code tạo notification giữ nguyên ...
+                const color = notificationColors[Math.floor(Math.random() * notificationColors.length)];
+                const material = new THREE.MeshPhysicalMaterial({
+                    color: color, metalness: 0.1, roughness: 0.2, emissive: color,
+                    emissiveIntensity: 0.8, transmission: 0.4, transparent: true, opacity: 0.8,
+                });
+                const notification = new THREE.Mesh(baseGeometry, material);
+                const scaleX = THREE.MathUtils.randFloat(2.5, 4);
+                const scaleY = THREE.MathUtils.randFloat(0.5, 0.8);
+                notification.scale.set(scaleX, scaleY, 0.15);
+                const radius = THREE.MathUtils.randFloat(7, 14);
+                const angle = Math.random() * Math.PI * 2;
+                const y = THREE.MathUtils.randFloat(-12, 12);
+                notification.position.set(Math.cos(angle) * radius, y, Math.sin(angle) * radius);
+                notification.userData = {
+                    bobSpeed: Math.random() * 0.5 + 0.3, bobOffset: Math.random() * Math.PI * 2,
+                    orbitSpeed: (Math.random() - 0.5) * 0.005, initialPosition: notification.position.clone(),
+                    targetQuaternion: new THREE.Quaternion(), currentQuaternion: new THREE.Quaternion().copy(notification.quaternion),
+                };
+                notifications.push(notification);
+                sceneContainer.add(notification); // <<< SỬA LỖI: Thêm vào sceneContainer
+            }
+
+            // 7. --- HỆ THỐNG HẠT NỀN ---
+            const particlesCount = 1000;
+            // ... code tạo particles giữ nguyên ...
+            const positions = new Float32Array(particlesCount * 3);
+            for (let i = 0; i < particlesCount; i++) {
+                positions[i * 3 + 0] = (Math.random() - 0.5) * 80;
+                positions[i * 3 + 1] = (Math.random() - 0.5) * 80;
+                positions[i * 3 + 2] = (Math.random() - 0.5) * 80;
+            }
+            const particlesGeometry = new THREE.BufferGeometry();
+            particlesGeometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+            const particlesMaterial = new THREE.PointsMaterial({
+                color: 0x8888aa, size: 0.08, blending: THREE.AdditiveBlending,
+                transparent: true, sizeAttenuation: true
+            });
+            const particles = new THREE.Points(particlesGeometry, particlesMaterial);
+            sceneContainer.add(particles); // <<< SỬA LỖI: Thêm vào sceneContainer
+
+            // 8. --- HẬU KỲ (POST-PROCESSING) ---
+            composer = new EffectComposer(renderer);
+            composer.addPass(new RenderPass(scene, camera));
+            
+            const ssaoPass = new SSAOPass(scene, camera, window.innerWidth, window.innerHeight);
+            ssaoPass.kernelRadius = 0.8;
+            ssaoPass.minDistance = 0.001;
+            ssaoPass.maxDistance = 0.1;
+            composer.addPass(ssaoPass);
+
+            const bloomPass = new UnrealBloomPass(new THREE.Vector2(window.innerWidth, window.innerHeight), 1.5, 0.4, 0.85);
+            bloomPass.threshold = 0;
+            bloomPass.strength = 0.5;
+            bloomPass.radius = 0.4;
+            composer.addPass(bloomPass);
+
+            // 9. --- EVENT LISTENERS ---
+            window.addEventListener('resize', onWindowResize);
+            window.addEventListener('mousemove', onMouseMove);
+        }
+
+        function onWindowResize() {
+            // ... code giữ nguyên ...
+             camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            composer.setSize(window.innerWidth, window.innerHeight);
+        }
+        
+        function onMouseMove(event) {
+            // ... code giữ nguyên ...
+            mouse.x = (event.clientX / window.innerWidth) * 2 - 1;
+            mouse.y = -(event.clientY / window.innerHeight) * 2 + 1;
+        }
+
+        function animate() {
+            const elapsedTime = performance.now() / 1000;
+
+            controls.update();
+            
+            // <<< SỬA LỖI: Bỏ code điều khiển camera, thay bằng điều khiển sceneContainer
+            // camera.position.x += (mouse.x * 2 - camera.position.x) * 0.02;
+            // camera.position.y += (mouse.y * 2 - camera.position.y) * 0.02;
+            // camera.lookAt(scene.position);
+            
+            // Hiệu ứng Parallax bằng cách xoay nhẹ container
+            sceneContainer.rotation.y += (mouse.x * 0.2 - sceneContainer.rotation.y) * 0.05;
+            sceneContainer.rotation.x += (-mouse.y * 0.2 - sceneContainer.rotation.x) * 0.05;
+            
+
+            notifications.forEach(notif => {
+                // ... code animation của notification giữ nguyên ...
+                const bob = Math.sin(elapsedTime * notif.userData.bobSpeed + notif.userData.bobOffset) * 0.3;
+                notif.position.y = notif.userData.initialPosition.y + bob;
+                notif.position.applyAxisAngle(new THREE.Vector3(0, 1, 0), notif.userData.orbitSpeed);
+                notif.userData.initialPosition.applyAxisAngle(new THREE.Vector3(0, 1, 0), notif.userData.orbitSpeed);
+                notif.userData.targetQuaternion.setFromRotationMatrix(
+                    new THREE.Matrix4().lookAt(notif.position, phone.position, notif.up)
+                );
+                notif.quaternion.slerp(notif.userData.targetQuaternion, 0.08);
+            });
+
+            composer.render();
+            requestAnimationFrame(animate);
+        }
+
+        init();
+        animate();
+    </script>
+</body>
+</html>
