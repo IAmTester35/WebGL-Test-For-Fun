@@ -3,167 +3,266 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>GPU Benchmark: WebGL Universe (Fixed)</title>
+    <title>GPU Stress Test: Three.js Particle Galaxy (Fixed)</title>
     <style>
-        body { margin: 0; overflow: hidden; background-color: #000; }
+        body { margin: 0; overflow: hidden; background-color: #000; color: white; font-family: monospace; }
         canvas { display: block; }
+        #info {
+            position: absolute;
+            top: 10px;
+            left: 10px;
+            padding: 10px;
+            background: rgba(0,0,0,0.7);
+            border-radius: 5px;
+            max-width: 350px;
+        }
     </style>
 </head>
 <body>
+    <div id="info">
+        Loading Three.js and initializing shaders...<br>
+        This will simulate a large number of particles entirely on the GPU.
+    </div>
 
-    <!-- Shaders -->
-    <script id="vertexShader" type="x-shader/x-vertex">
-        attribute float aSize;
-        attribute vec3 aColor;
-        varying vec3 vColor;
-        void main() {
-            vColor = aColor;
-            vec4 mvPosition = modelViewMatrix * vec4( position, 1.0 );
-            gl_PointSize = aSize * ( 200.0 / -mvPosition.z );
-            gl_Position = projectionMatrix * mvPosition;
-        }
-    </script>
-    <script id="fragmentShader" type="x-shader/x-fragment">
-        varying vec3 vColor;
-        void main() {
-            float r = distance(gl_PointCoord, vec2(0.5, 0.5));
-            if (r > 0.5) {
-                discard;
+    <script type="importmap">
+        {
+            "imports": {
+                "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+                "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
             }
-            float alpha = 1.0 - smoothstep(0.4, 0.5, r);
-            gl_FragColor = vec4(vColor * alpha, alpha);
         }
     </script>
 
-    <!-- Main application script -->
-    <script type="module">
-        // TẤT CẢ CÁC IMPORT ĐỀU SỬ DỤNG PHIÊN BẢN MODULE TỪ CDN
-        import * as THREE from 'https://cdn.jsdelivr.net/npm/three@0.165.0/build/three.module.js';
-        import { EffectComposer } from 'https://cdn.jsdelivr.net/npm/three@0.165.0/examples/jsm/postprocessing/EffectComposer.js';
-        import { RenderPass } from 'https://cdn.jsdelivr.net/npm/three@0.165.0/examples/jsm/postprocessing/RenderPass.js';
-        import { UnrealBloomPass } from 'https://cdn.jsdelivr.net/npm/three@0.165.0/examples/jsm/postprocessing/UnrealBloomPass.js';
-        import GUI from 'https://cdn.jsdelivr.net/npm/lil-gui@0.19.2/dist/lil-gui.esm.js';
+<script type="module">
+    import * as THREE from 'three';
+    import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+    import Stats from 'three/addons/libs/stats.module.js';
+    // --- THIS IS THE CORRECTED LINE ---
+    import { GPUComputationRenderer } from 'three/addons/misc/GPUComputationRenderer.js';
 
-        let camera, scene, renderer, composer, gui;
-        let particles, geometry, material;
+    // --- Configuration ---
+    // The total number of particles is WIDTH * WIDTH.
+    // WARNING: Increasing this number uses exponentially more VRAM and processing power.
+    // 512 = 262,144 particles
+    // 1024 = 1,048,576 particles
+    // 2048 = 4,194,304 particles (May crash on many systems)
+    const WIDTH = 1024;
+    const PARTICLE_COUNT = WIDTH * WIDTH;
 
-        const params = {
-            particleCount: 500000,
-            particleSize: 0.5,
-            bloomEnabled: true,
-            bloomThreshold: 0,
-            bloomStrength: 1.5,
-            bloomRadius: 0.5
-        };
+    // --- Basic Scene Setup ---
+    const scene = new THREE.Scene();
+    const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+    camera.position.z = 150;
 
-        init();
-        animate();
+    const renderer = new THREE.WebGLRenderer();
+    renderer.setSize(window.innerWidth, window.innerHeight);
+    document.body.appendChild(renderer.domElement);
+    
+    const controls = new OrbitControls(camera, renderer.domElement);
+    controls.enableDamping = true;
 
-        function init() {
+    const stats = new Stats();
+    document.body.appendChild(stats.dom);
+    
+    const infoDiv = document.getElementById('info');
+    infoDiv.innerHTML = `Simulating ${PARTICLE_COUNT.toLocaleString()} particles using GPGPU.<br>
+                         Use your mouse to rotate the camera.`;
 
-            scene = new THREE.Scene();
-            camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
-            camera.position.z = 10;
+    let gpuCompute;
+    let positionVariable;
+    let velocityVariable;
+    let positionUniforms;
+    let velocityUniforms;
 
-            renderer = new THREE.WebGLRenderer();
-            renderer.setPixelRatio(window.devicePixelRatio);
-            renderer.setSize(window.innerWidth, window.innerHeight);
-            document.body.appendChild(renderer.domElement);
+    init();
+    animate();
 
-            createParticles();
-            
-            const renderScene = new RenderPass(scene, camera);
-            const bloomPass = new UnrealBloomPass(
-                new THREE.Vector2(window.innerWidth, window.innerHeight),
-                params.bloomStrength,
-                params.bloomRadius,
-                params.bloomThreshold
-            );
+    function init() {
+        // --- GPGPU Setup ---
+        gpuCompute = new GPUComputationRenderer(WIDTH, WIDTH, renderer);
 
-            composer = new EffectComposer(renderer);
-            composer.addPass(renderScene);
-            composer.addPass(bloomPass);
-
-            setupGUI(bloomPass);
-
-            window.addEventListener('resize', onWindowResize);
+        // Check for floating point texture support
+        if (!gpuCompute.isSupported) {
+            alert('Floating point textures are not supported on your system.');
+            return;
         }
 
-        function createParticles() {
-            if (particles) {
-                scene.remove(particles);
-                geometry.dispose();
-                material.dispose();
-            }
+        // Create initial data textures
+        const dtPosition = gpuCompute.createTexture();
+        const dtVelocity = gpuCompute.createTexture();
+        fillInitialTextures(dtPosition, dtVelocity);
+        
+        // Add variables to the GPGPU renderer
+        positionVariable = gpuCompute.addVariable('texturePosition', computeShaderPosition, dtPosition);
+        velocityVariable = gpuCompute.addVariable('textureVelocity', computeShaderVelocity, dtVelocity);
 
-            geometry = new THREE.BufferGeometry();
-            const positions = [];
-            const colors = [];
-            const sizes = [];
-            const color = new THREE.Color();
+        // Set variable dependencies
+        gpuCompute.setVariableDependencies(positionVariable, [positionVariable, velocityVariable]);
+        gpuCompute.setVariableDependencies(velocityVariable, [positionVariable, velocityVariable]);
 
-            for (let i = 0; i < params.particleCount; i++) {
-                const x = THREE.MathUtils.randFloatSpread(100);
-                const y = THREE.MathUtils.randFloatSpread(100);
-                const z = THREE.MathUtils.randFloatSpread(100);
-                positions.push(x, y, z);
+        // Uniforms for the compute shaders
+        positionUniforms = positionVariable.material.uniforms;
+        velocityUniforms = velocityVariable.material.uniforms;
 
-                color.setHSL(0.5 + 0.5 * Math.random(), 1.0, 0.5 + 0.5 * Math.random());
-                colors.push(color.r, color.g, color.b);
+        velocityUniforms['u_time'] = { value: 0.0 };
+        velocityUniforms['u_gravityCenter'] = { value: new THREE.Vector3() };
 
-                sizes.push(params.particleSize * (0.5 + Math.random()));
-            }
-
-            geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
-            geometry.setAttribute('aColor', new THREE.Float32BufferAttribute(colors, 3));
-            geometry.setAttribute('aSize', new THREE.Float32BufferAttribute(sizes, 1));
-
-            material = new THREE.ShaderMaterial({
-                vertexShader: document.getElementById('vertexShader').textContent,
-                fragmentShader: document.getElementById('fragmentShader').textContent,
-                transparent: true,
-                blending: THREE.AdditiveBlending,
-                depthTest: false,
-            });
-
-            particles = new THREE.Points(geometry, material);
-            scene.add(particles);
+        // Initialize GPGPU
+        const error = gpuCompute.init();
+        if (error !== null) {
+            console.error(error);
         }
         
-        function setupGUI(bloomPass) {
-            if (gui) gui.destroy();
-            gui = new GUI();
-            gui.title('GPU Benchmark Controls');
+        // --- Particle Rendering Setup ---
+        const geometry = new THREE.BufferGeometry();
+        const uvs = new Float32Array(PARTICLE_COUNT * 2);
+        let p = 0;
+        for (let j = 0; j < WIDTH; j++) {
+            for (let i = 0; i < WIDTH; i++) {
+                uvs[p++] = i / (WIDTH - 1);
+                uvs[p++] = j / (WIDTH - 1);
+            }
+        }
+        geometry.setAttribute('uv', new THREE.BufferAttribute(uvs, 2));
 
-            const particleFolder = gui.addFolder('Particles');
-            particleFolder.add(params, 'particleCount', 1000, 2000000, 1000).onChange(createParticles).name('Particle Count');
+        const particleMaterial = new THREE.ShaderMaterial({
+            uniforms: {
+                texturePosition: { value: null },
+                u_cameraPos: { value: camera.position },
+                u_pointSize: { value: 1.5 }
+            },
+            vertexShader: particleVertexShader,
+            fragmentShader: particleFragmentShader,
+            blending: THREE.AdditiveBlending,
+            depthWrite: false,
+            transparent: true,
+        });
+
+        const particles = new THREE.Points(geometry, particleMaterial);
+        scene.add(particles);
+    }
+
+    function fillInitialTextures(texturePosition, textureVelocity) {
+        const posArray = texturePosition.image.data;
+        const velArray = textureVelocity.image.data;
+        const galaxyRadius = 100;
+        const galaxyArms = 4;
+        const armSpread = 2.5;
+
+        for (let k = 0, kl = posArray.length; k < kl; k += 4) {
+            // Position
+            const radius = Math.random() * galaxyRadius;
+            const angle = (Math.floor(k / 4) % galaxyArms) * (Math.PI * 2 / galaxyArms) + (Math.random() - 0.5) * armSpread + Math.pow(radius / galaxyRadius, 2) * 5;
             
-            const sizeController = particleFolder.add(params, 'particleSize', 0.1, 5).name('Base Size');
-            sizeController.onChange(value => {
-                const sizes = geometry.attributes.aSize.array;
-                for (let i = 0; i < sizes.length; i++) {
-                    sizes[i] = value * (0.5 + Math.random());
-                }
-                geometry.attributes.aSize.needsUpdate = true;
-            });
+            const x = Math.cos(angle) * radius;
+            const y = (Math.random() - 0.5) * (1 - (radius / galaxyRadius)) * 15;
+            const z = Math.sin(angle) * radius;
 
-            const bloomFolder = gui.addFolder('Bloom Effect');
-            bloomFolder.add(params, 'bloomEnabled').onChange(value => composer.passes[1].enabled = value).name('Enable Bloom');
-            bloomFolder.add(params, 'bloomStrength', 0.0, 3.0, 0.1).onChange(value => bloomPass.strength = value).name('Strength');
-            bloomFolder.add(params, 'bloomRadius', 0.0, 1.0, 0.01).onChange(value => bloomPass.radius = value).name('Radius');
-            bloomFolder.add(params, 'bloomThreshold', 0.0, 1.0, 0.01).onChange(value => bloomPass.threshold = value).name('Threshold');
-        }
+            posArray[k + 0] = x;
+            posArray[k + 1] = y;
+            posArray[k + 2] = z;
+            posArray[k + 3] = 1.0; // w component
 
-        function onWindowResize() {
-            camera.aspect = window.innerWidth / window.innerHeight;
-            camera.updateProjectionMatrix();
-            renderer.setSize(window.innerWidth, window.innerHeight);
-            composer.setSize(window.innerWidth, window.innerHeight);
+            // Velocity (to create the swirl)
+            const tangentialSpeed = radius * 0.1;
+            velArray[k + 0] = -z * tangentialSpeed * 0.01;
+            velArray[k + 1] = 0.0;
+            velArray[k + 2] = x * tangentialSpeed * 0.01;
+            velArray[k + 3] = 1.0; // w component
         }
+    }
 
-        function animate() {
-            requestAnimationFrame(animate);
+
+    function animate() {
+        requestAnimationFrame(animate);
+        const now = performance.now();
+        
+        // --- GPGPU Update ---
+        velocityUniforms['u_time'].value = now;
+        gpuCompute.compute();
+        
+        // --- Render Scene ---
+        const particleUniforms = scene.children[0].material.uniforms;
+        particleUniforms.texturePosition.value = gpuCompute.getCurrentRenderTarget(positionVariable).texture;
+        
+        controls.update();
+        stats.update();
+        renderer.render(scene, camera);
+    }
+    
+    window.addEventListener('resize', () => {
+        camera.aspect = window.innerWidth / window.innerHeight;
+        camera.updateProjectionMatrix();
+        renderer.setSize(window.innerWidth, window.innerHeight);
+    });
+
+    // --- GLSL Shaders ---
+
+    // Shader to update velocity
+    const computeShaderVelocity = /* glsl */`
+        uniform float u_time;
+        uniform vec3 u_gravityCenter;
+
+        void main() {
+            vec2 uv = gl_FragCoord.xy / resolution.xy;
+            vec3 position = texture2D(texturePosition, uv).xyz;
+            vec3 velocity = texture2D(textureVelocity, uv).xyz;
+
+            // Gravitational pull towards the center
+            vec3 direction = u_gravityCenter - position;
+            float distSq = dot(direction, direction);
+            distSq = max(distSq, 10.0); // Avoid singularity
+            vec3 gravity = normalize(direction) * (500.0 / distSq);
+
+            // Update velocity
+            vec3 newVelocity = velocity + gravity * 0.016;
+            
+            // Simple drag
+            newVelocity *= 0.99;
+
+            gl_FragColor = vec4(newVelocity, 1.0);
         }
-    </script>
+    `;
+
+    // Shader to update position based on velocity
+    const computeShaderPosition = /* glsl */`
+        void main() {
+            vec2 uv = gl_FragCoord.xy / resolution.xy;
+            vec3 position = texture2D(texturePosition, uv).xyz;
+            vec3 velocity = texture2D(textureVelocity, uv).xyz;
+            
+            position += velocity * 0.16; // Multiply by delta time
+            
+            gl_FragColor = vec4(position, 1.0);
+        }
+    `;
+
+    // Shader to render the particles on screen
+    const particleVertexShader = /* glsl */`
+        uniform sampler2D texturePosition;
+        uniform float u_pointSize;
+        
+        void main() {
+            // 'uv' is a custom attribute we created to reference the texture pixel
+            vec3 pos = texture2D(texturePosition, uv).xyz;
+
+            vec4 modelViewPosition = modelViewMatrix * vec4(pos, 1.0);
+            gl_Position = projectionMatrix * modelViewPosition;
+            gl_PointSize = u_pointSize / -modelViewPosition.z;
+        }
+    `;
+    
+    const particleFragmentShader = /* glsl */`
+        void main() {
+            float dist = length(gl_PointCoord - vec2(0.5));
+            if (dist > 0.5) {
+                discard;
+            }
+            // A nice purple-ish color that gets brighter in the center
+            gl_FragColor = vec4(0.6, 0.5, 1.0, 0.8 * (1.0 - dist * 2.0));
+        }
+    `;
+
+</script>
 </body>
 </html>

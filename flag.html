@@ -1,43 +1,102 @@
 <!DOCTYPE html>
 <html>
 <head>
-    <title>Three.js - Quốc kỳ Tung bay (Chuẩn)</title>
+    <title>Three.js - Reality Fracture</title>
     <style>
-        body { margin: 0; overflow: hidden; }
+        body { margin: 0; overflow: hidden; background-color: #000; }
         canvas { display: block; }
+        #info {
+            position: absolute;
+            top: 10px;
+            width: 100%;
+            text-align: center;
+            color: white;
+            font-family: monospace;
+            font-size: 1.2em;
+            text-shadow: 0 0 5px black;
+            pointer-events: none; /* Make text non-interactive */
+        }
     </style>
 </head>
 <body>
+    <div id="info">Click to shatter the fabric of reality</div>
+
     <script async src="https://unpkg.com/es-module-shims@1.3.6/dist/es-module-shims.js"></script>
     <script type="importmap">
     {
         "imports": {
             "three": "https://unpkg.com/three@0.148.0/build/three.module.js",
-            "three/addons/": "https://unpkg.com/three@0.148.0/examples/jsm/"
+            "three/addons/": "https://unpkg.com/three@0.148.0/examples/jsm/",
+            "gsap": "https://unpkg.com/gsap@3.11.4/index.js"
         }
     }
     </script>
 
-    <!-- Vertex Shader và Fragment Shader không thay đổi -->
+    <!-- THE VERTEX SHADER - THE ENGINE OF TRANSFORMATION -->
     <script type="x-shader/x-vertex" id="flagVertexShader">
         uniform float uTime;
         uniform vec2 uFrequency;
         uniform float uAmplitude;
+        uniform float uProgress; // 0 = flag, 1 = galaxy
+
+        attribute vec3 aCenter;
+        attribute float aRandom;
+
         varying vec2 vUv;
+
+        mat2 rotate2d(float _angle){
+            return mat2(cos(_angle),-sin(_angle),
+                        sin(_angle),cos(_angle));
+        }
+
         void main() {
-            vec3 pos = position;
             vUv = uv;
-            float waveX = sin(pos.x * uFrequency.x + uTime * 2.0) * uAmplitude;
-            float waveY = sin(pos.y * uFrequency.y + uTime * 1.5) * uAmplitude * 0.5;
-            pos.z = (waveX + waveY) * uv.x;
-            gl_Position = projectionMatrix * modelViewMatrix * vec4(pos, 1.0);
+
+            vec3 wavingPosition = position;
+            float waveX = sin(wavingPosition.x * uFrequency.x + uTime * 2.0) * uAmplitude;
+            float waveY = sin(wavingPosition.y * uFrequency.y + uTime * 1.5) * uAmplitude * 0.5;
+            wavingPosition.z = (waveX + waveY) * uv.x;
+
+            // --- REALITY 2: The Particle Galaxy ---
+            // Rotate the triangle around its center to give it a spinning effect
+            vec2 rotatedDisplacement = rotate2d(aRandom * 10.0 + uTime * 0.5) * (position.xy - aCenter.xy);
+            
+            // *** FIX 1: Correctly combine a vec3 and a vec2 ***
+            vec3 displaced = aCenter + vec3(rotatedDisplacement, 0.0);
+
+            // Define the spiral galaxy arms
+            float angle = atan(displaced.y, displaced.x) + (aRandom - 0.5) * 2.0;
+            float distanceFromCenter = length(displaced.xy);
+            float spiral = log(distanceFromCenter) * 4.0 + uTime * 0.8;
+            angle += spiral;
+
+            vec3 galaxyPosition = vec3(0.0);
+            galaxyPosition.x = cos(angle) * distanceFromCenter * 2.0;
+            galaxyPosition.y = sin(aRandom * 3.14 * 2.0) * 4.0 - 2.0;
+            galaxyPosition.z = sin(angle) * distanceFromCenter * 2.0;
+
+            galaxyPosition.xz = rotate2d(uTime * 0.1) * galaxyPosition.xz;
+
+            float progress = smoothstep(0.0, 1.0, uProgress);
+            progress = smoothstep(aRandom * 0.6, 1.0, progress);
+
+            vec3 finalPosition = mix(wavingPosition, galaxyPosition, progress);
+
+            gl_Position = projectionMatrix * modelViewMatrix * vec4(finalPosition, 1.0);
         }
     </script>
+
+    <!-- Fragment Shader is unchanged -->
     <script type="x-shader/x-fragment" id="flagFragmentShader">
         uniform sampler2D uTexture;
+        uniform float uProgress;
         varying vec2 vUv;
         void main() {
             vec4 textureColor = texture2D(uTexture, vUv);
+            if (textureColor.r < 0.01 && textureColor.g < 0.01 && textureColor.b < 0.01) {
+                discard;
+            }
+            textureColor.a *= (1.0 - uProgress * 0.3);
             gl_FragColor = textureColor;
         }
     </script>
@@ -46,35 +105,31 @@
         import * as THREE from 'three';
         import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
         import { RGBELoader } from 'three/addons/loaders/RGBELoader.js';
+        import { gsap } from 'gsap';
 
-        // --- Thiết lập cơ bản (không đổi) ---
+        // --- Basic Setup ---
         const scene = new THREE.Scene();
         const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
-        camera.position.set(5, 5, 5);
-        const renderer = new THREE.WebGLRenderer({ antialias: true });
+        camera.position.set(5, 5, 8);
+        const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
         renderer.setSize(window.innerWidth, window.innerHeight);
         renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
         renderer.toneMapping = THREE.ACESFilmicToneMapping;
         renderer.outputEncoding = THREE.sRGBEncoding;
-        renderer.shadowMap.enabled = true;
         document.body.appendChild(renderer.domElement);
         const controls = new OrbitControls(camera, renderer.domElement);
         controls.enableDamping = true;
         controls.target.set(0, 3.5, 0);
 
-        // --- Ánh sáng (không đổi) ---
-        new RGBELoader().load('https://unpkg.com/three@0.148.0/examples/textures/equirectangular/venice_sunset_1k.hdr', (texture) => {
+        // --- Environment & Lighting ---
+        // *** FIX 2: Use a CORS-friendly URL for the texture ***
+        new RGBELoader().load('https://raw.githack.com/mrdoob/three.js/r148/examples/textures/equirectangular/venice_sunset_1k.hdr', (texture) => {
             texture.mapping = THREE.EquirectangularReflectionMapping;
-            scene.background = texture;
             scene.environment = texture;
         });
-        const directionalLight = new THREE.DirectionalLight(0xffffff, 1.5);
-        directionalLight.position.set(10, 10, 5);
-        directionalLight.castShadow = true;
-        directionalLight.shadow.mapSize.set(1024, 1024);
-        scene.add(directionalLight);
-        
-        // --- 3. Tạo Texture Cờ Việt Nam bằng Canvas (ĐÃ SỬA LỖI) ---
+
+        // --- The rest of the code is unchanged ---
+
         function createVietnamFlagTexture() {
             const canvas = document.createElement('canvas');
             const width = 512;
@@ -82,56 +137,69 @@
             canvas.width = width;
             canvas.height = height;
             const context = canvas.getContext('2d');
-
-            // Vẽ nền đỏ
             context.fillStyle = '#DA251D';
             context.fillRect(0, 0, width, height);
-
-            // Vẽ ngôi sao vàng (PHIÊN BẢN SỬA LỖI)
             context.fillStyle = '#FFFF00';
             context.beginPath();
-
             const centerX = width / 2;
             const centerY = height / 2;
             const outerRadius = width / 5;
             const innerRadius = outerRadius / 2.5;
             const numPoints = 5;
-            
-            // Bắt đầu từ đỉnh trên cùng của ngôi sao (-90 độ)
             let rotation = Math.PI / 2 * 3;
             let x, y;
-
             for (let i = numPoints * 2; i > 0; i--) {
-                // Sử dụng bán kính ngoài cho đỉnh, bán kính trong cho chỗ lõm
                 const radius = (i % 2 === 0) ? outerRadius : innerRadius;
-                
                 x = centerX + Math.cos(rotation) * radius;
                 y = centerY + Math.sin(rotation) * radius;
-
-                if (i === numPoints * 2) {
-                    context.moveTo(x, y);
-                } else {
-                    context.lineTo(x, y);
-                }
-                
-                // Xoay một góc để đến điểm tiếp theo
+                if (i === numPoints * 2) { context.moveTo(x, y); } else { context.lineTo(x, y); }
                 rotation += Math.PI / numPoints;
             }
-
             context.closePath();
             context.fill();
-
             return new THREE.CanvasTexture(canvas);
         }
 
-        // --- Tạo các đối tượng (không đổi) ---
+        function createShatterableGeometry(baseGeometry) {
+            const finalGeometry = new THREE.BufferGeometry();
+            const vertices = [];
+            const uvs = [];
+            const centers = [];
+            const randoms = [];
+            const posAttr = baseGeometry.getAttribute('position');
+            const uvAttr = baseGeometry.getAttribute('uv');
+            const indexAttr = baseGeometry.getIndex();
+            for (let i = 0; i < indexAttr.count; i += 3) {
+                const iA = indexAttr.getX(i);
+                const iB = indexAttr.getX(i + 1);
+                const iC = indexAttr.getX(i + 2);
+                const vA = new THREE.Vector3().fromBufferAttribute(posAttr, iA);
+                const vB = new THREE.Vector3().fromBufferAttribute(posAttr, iB);
+                const vC = new THREE.Vector3().fromBufferAttribute(posAttr, iC);
+                const uvA = new THREE.Vector2().fromBufferAttribute(uvAttr, iA);
+                const uvB = new THREE.Vector2().fromBufferAttribute(uvAttr, iB);
+                const uvC = new THREE.Vector2().fromBufferAttribute(uvAttr, iC);
+                const center = new THREE.Vector3().add(vA).add(vB).add(vC).divideScalar(3);
+                const rand = Math.random();
+                vertices.push(vA.x, vA.y, vA.z, vB.x, vB.y, vB.z, vC.x, vC.y, vC.z);
+                uvs.push(uvA.x, uvA.y, uvB.x, uvB.y, uvC.x, uvC.y);
+                centers.push(center.x, center.y, center.z, center.x, center.y, center.z, center.x, center.y, center.z);
+                randoms.push(rand, rand, rand);
+            }
+            finalGeometry.setAttribute('position', new THREE.Float32BufferAttribute(vertices, 3));
+            finalGeometry.setAttribute('uv', new THREE.Float32BufferAttribute(uvs, 2));
+            finalGeometry.setAttribute('aCenter', new THREE.Float32BufferAttribute(centers, 3));
+            finalGeometry.setAttribute('aRandom', new THREE.Float32BufferAttribute(randoms, 1));
+            return finalGeometry;
+        }
+
         const poleGeometry = new THREE.CylinderGeometry(0.1, 0.1, 7, 32);
-        const poleMaterial = new THREE.MeshStandardMaterial({ color: 0xffffff, metalness: 0.8, roughness: 0.2 });
+        const poleMaterial = new THREE.MeshStandardMaterial({ color: 0xcccccc, metalness: 0.9, roughness: 0.1 });
         const pole = new THREE.Mesh(poleGeometry, poleMaterial);
         pole.position.y = 2.8;
-        pole.castShadow = true;
         scene.add(pole);
-        const flagGeometry = new THREE.PlaneGeometry(3, 2, 50, 50);
+        const baseFlagGeometry = new THREE.PlaneGeometry(3, 2, 64, 64);
+        const flagGeometry = createShatterableGeometry(baseFlagGeometry);
         const flagMaterial = new THREE.ShaderMaterial({
             vertexShader: document.getElementById('flagVertexShader').textContent,
             fragmentShader: document.getElementById('flagFragmentShader').textContent,
@@ -139,21 +207,16 @@
                 uTime: { value: 0 },
                 uFrequency: { value: new THREE.Vector2(4.0, 2.0) },
                 uAmplitude: { value: 0.3 },
-                uTexture: { value: createVietnamFlagTexture() }
+                uTexture: { value: createVietnamFlagTexture() },
+                uProgress: { value: 0.0 }
             },
             side: THREE.DoubleSide,
             transparent: true
         });
         const flag = new THREE.Mesh(flagGeometry, flagMaterial);
         flag.position.set(1.5, 5, 0);
-        flag.castShadow = true;
         scene.add(flag);
-        const ground = new THREE.Mesh(new THREE.PlaneGeometry(20, 20), new THREE.MeshStandardMaterial({ color: 0x444444, roughness: 0.8 }));
-        ground.rotation.x = -Math.PI / 2;
-        ground.receiveShadow = true;
-        scene.add(ground);
 
-        // --- Vòng lặp Animation (không đổi) ---
         const clock = new THREE.Clock();
         function animate() {
             const elapsedTime = clock.getElapsedTime();
@@ -162,12 +225,38 @@
             renderer.render(scene, camera);
             requestAnimationFrame(animate);
         }
+        animate();
+
+        let isShattered = false;
+        window.addEventListener('click', () => {
+            isShattered = !isShattered;
+            gsap.to(flagMaterial.uniforms.uProgress, {
+                value: isShattered ? 1 : 0,
+                duration: 4.0,
+                ease: 'power3.inOut'
+            });
+            gsap.to(pole.position, {
+                y: isShattered ? -10 : 2.8,
+                duration: 3.0,
+                ease: 'power3.inOut'
+            });
+            gsap.to(scene, {
+                backgroundBlurriness: isShattered ? 1 : 0,
+                duration: 4.0,
+                ease: 'power3.inOut'
+            })
+            document.getElementById('info').style.opacity = 0;
+            setTimeout(() => {
+                document.getElementById('info').innerText = isShattered ? "Gaze into the digital cosmos" : "Click to restore reality";
+                document.getElementById('info').style.opacity = 1;
+            }, 1000);
+        });
+
         window.addEventListener('resize', () => {
             camera.aspect = window.innerWidth / window.innerHeight;
             camera.updateProjectionMatrix();
             renderer.setSize(window.innerWidth, window.innerHeight);
         });
-        animate();
     </script>
 </body>
 </html>
