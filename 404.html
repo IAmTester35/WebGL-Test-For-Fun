@@ -1,0 +1,260 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>404 Not Found</title>
+    <style>
+        body { margin: 0; overflow: hidden; background-color: #ffffff; }
+        canvas { display: block; }
+    </style>
+</head>
+<body>
+    <script type="importmap">
+    {
+        "imports": {
+            "three": "https://esm.run/three",
+            "three/addons/": "https://esm.run/three/examples/jsm/"
+        }
+    }
+    </script>
+    <script type="module">
+        import * as THREE from 'three';
+        import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+
+        let scene, camera, renderer, controls;
+        let mainGroup;
+        let pulseLines;
+        const pulses = [];
+        const NUM_PULSES = 200;
+        const PULSE_LIFETIME = 150; // frames
+
+        const PALE_GREEN = 0x87bc9d;
+        const WHITE = 0xffffff;
+
+        init();
+        animate();
+
+        function init() {
+            // Scene
+            scene = new THREE.Scene();
+            scene.background = new THREE.Color(WHITE);
+            scene.fog = new THREE.Fog(WHITE, 15, 30);
+
+            // Camera
+            camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+            camera.position.z = 10;
+
+            // Renderer
+            renderer = new THREE.WebGLRenderer({ antialias: true });
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+            document.body.appendChild(renderer.domElement);
+
+            // Controls
+            controls = new OrbitControls(camera, renderer.domElement);
+            controls.enableDamping = true;
+            controls.enablePan = false;
+            controls.minDistance = 5;
+            controls.maxDistance = 20;
+            controls.autoRotate = true;
+            controls.autoRotateSpeed = 0.25;
+
+            // Lighting
+            const ambientLight = new THREE.AmbientLight(PALE_GREEN, 0.5);
+            scene.add(ambientLight);
+
+            const directionalLight = new THREE.DirectionalLight(WHITE, 1);
+            directionalLight.position.set(5, 10, 7.5);
+            scene.add(directionalLight);
+
+            mainGroup = new THREE.Group();
+            scene.add(mainGroup);
+
+            // Create Content
+            const text404 = create404Text();
+            mainGroup.add(text404);
+
+            const network = createNeuralNetwork(350, 8);
+            mainGroup.add(network);
+
+            // Event Listeners
+            window.addEventListener('resize', onWindowResize, false);
+        }
+
+        function create404Text() {
+            const textGroup = new THREE.Group();
+            const material = new THREE.MeshStandardMaterial({
+                color: PALE_GREEN,
+                metalness: 0.1,
+                roughness: 0.6,
+                emissive: PALE_GREEN,
+                emissiveIntensity: 0.15
+            });
+            const thickness = 0.5;
+
+            // Create '4'
+            const four = new THREE.Group();
+            const bar1 = new THREE.Mesh(new THREE.BoxGeometry(thickness, 2.5, thickness), material);
+            bar1.position.set(0.5, 0.25, 0);
+            const bar2 = new THREE.Mesh(new THREE.BoxGeometry(2, thickness, thickness), material);
+            bar2.position.set(-0.25, 0, 0);
+            const bar3 = new THREE.Mesh(new THREE.BoxGeometry(thickness, 1.5, thickness), material);
+            bar3.position.set(-1, 0.75, 0);
+            four.add(bar1, bar2, bar3);
+            four.position.x = -3.5;
+            textGroup.add(four);
+
+            // Create '0'
+            const zero = new THREE.Group();
+            const z_bar1 = new THREE.Mesh(new THREE.BoxGeometry(thickness, 2.5, thickness), material);
+            z_bar1.position.x = -1;
+            const z_bar2 = new THREE.Mesh(new THREE.BoxGeometry(thickness, 2.5, thickness), material);
+            z_bar2.position.x = 1;
+            const z_bar3 = new THREE.Mesh(new THREE.BoxGeometry(2 + thickness, thickness, thickness), material);
+            z_bar3.position.y = 1.25;
+            const z_bar4 = new THREE.Mesh(new THREE.BoxGeometry(2 + thickness, thickness, thickness), material);
+            z_bar4.position.y = -1.25;
+            zero.add(z_bar1, z_bar2, z_bar3, z_bar4);
+            textGroup.add(zero);
+
+            // Create second '4' by cloning the first
+            const four2 = four.clone();
+            four2.position.x = 3.5;
+            textGroup.add(four2);
+
+            return textGroup;
+        }
+
+        function createNeuralNetwork(numPoints, radius) {
+            const networkGroup = new THREE.Group();
+            const points = [];
+            const vertices = [];
+
+            for (let i = 0; i < numPoints; i++) {
+                const vector = new THREE.Vector3().setFromSphericalCoords(
+                    radius * (0.5 + Math.random() * 0.5),
+                    Math.acos(1 - 2 * Math.random()),
+                    Math.random() * 2 * Math.PI
+                );
+                points.push(vector);
+                vertices.push(vector.x, vector.y, vector.z);
+            }
+
+            // Neurons (Points)
+            const pointsGeometry = new THREE.BufferGeometry();
+            pointsGeometry.setAttribute('position', new THREE.Float32BufferAttribute(vertices, 3));
+            const pointsMaterial = new THREE.PointsMaterial({ color: PALE_GREEN, size: 0.1, transparent: true, opacity: 0.8 });
+            const neuronCloud = new THREE.Points(pointsGeometry, pointsMaterial);
+            networkGroup.add(neuronCloud);
+
+            // Synapses (Lines)
+            const lineVertices = [];
+            const lineColors = [];
+            const baseColor = new THREE.Color(PALE_GREEN);
+
+            for (let i = 0; i < numPoints; i++) {
+                for (let j = i + 1; j < numPoints; j++) {
+                    const p1 = points[i];
+                    const p2 = points[j];
+                    const dist = p1.distanceTo(p2);
+
+                    if (dist > 1.5 && dist < 3.0) { // Connect if distance is within range
+                       if(Math.random() > 0.9) { // And only connect a fraction of them
+                            lineVertices.push(p1.x, p1.y, p1.z);
+                            lineVertices.push(p2.x, p2.y, p2.z);
+                            lineColors.push(baseColor.r, baseColor.g, baseColor.b);
+                            lineColors.push(baseColor.r, baseColor.g, baseColor.b);
+                       }
+                    }
+                }
+            }
+
+            const lineGeometry = new THREE.BufferGeometry();
+            lineGeometry.setAttribute('position', new THREE.Float32BufferAttribute(lineVertices, 3));
+            lineGeometry.setAttribute('color', new THREE.Float32BufferAttribute(lineColors, 3));
+
+            const lineMaterial = new THREE.LineBasicMaterial({ vertexColors: true, transparent: true, opacity: 0.3 });
+            pulseLines = new THREE.LineSegments(lineGeometry, lineMaterial);
+            networkGroup.add(pulseLines);
+
+            // Initialize pulses
+            for(let i = 0; i < NUM_PULSES; i++) {
+                startNewPulse();
+            }
+
+            return networkGroup;
+        }
+
+        function startNewPulse() {
+            const totalLines = pulseLines.geometry.attributes.position.count / 2;
+            if (totalLines === 0) return;
+            const lineIndex = Math.floor(Math.random() * totalLines);
+            pulses.push({
+                lineIndex: lineIndex,
+                age: 0
+            });
+        }
+
+        function updatePulses() {
+            if (!pulseLines) return;
+
+            const colorAttribute = pulseLines.geometry.attributes.color;
+            const totalLines = colorAttribute.count / 2;
+            const baseColor = new THREE.Color(PALE_GREEN);
+            const pulseColor = new THREE.Color(WHITE);
+            const activeLines = new Set();
+            
+            // Update and track active pulses
+            for (let i = pulses.length - 1; i >= 0; i--) {
+                const pulse = pulses[i];
+                pulse.age++;
+
+                if (pulse.age >= PULSE_LIFETIME) {
+                    pulses.splice(i, 1);
+                    startNewPulse();
+                    continue;
+                }
+                
+                activeLines.add(pulse.lineIndex);
+
+                const progress = pulse.age / PULSE_LIFETIME;
+                const alpha = Math.sin(progress * Math.PI);
+                const interpolatedColor = baseColor.clone().lerp(pulseColor, alpha);
+
+                const v1_index = pulse.lineIndex * 2;
+                const v2_index = pulse.lineIndex * 2 + 1;
+
+                colorAttribute.setXYZ(v1_index, interpolatedColor.r, interpolatedColor.g, interpolatedColor.b);
+                colorAttribute.setXYZ(v2_index, interpolatedColor.r, interpolatedColor.g, interpolatedColor.b);
+            }
+            
+            // Reset inactive lines (more efficient)
+            for (let i = 0; i < totalLines; i++) {
+                if (!activeLines.has(i)) {
+                    const currentColor = new THREE.Color().fromBufferAttribute(colorAttribute, i * 2);
+                    if (!currentColor.equals(baseColor)) {
+                       colorAttribute.setXYZ(i * 2, baseColor.r, baseColor.g, baseColor.b);
+                       colorAttribute.setXYZ(i * 2 + 1, baseColor.r, baseColor.g, baseColor.b);
+                    }
+                }
+            }
+
+            colorAttribute.needsUpdate = true;
+        }
+
+        function onWindowResize() {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        }
+
+        function animate() {
+            requestAnimationFrame(animate);
+            controls.update();
+            updatePulses();
+            renderer.render(scene, camera);
+        }
+    </script>
+</body>
+</html>

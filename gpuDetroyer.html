@@ -3,266 +3,244 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>GPU Stress Test: Three.js Particle Galaxy (Fixed)</title>
+    <title>Thiên hà hủy diệt GPU</title>
     <style>
-        body { margin: 0; overflow: hidden; background-color: #000; color: white; font-family: monospace; }
+        body { margin: 0; overflow: hidden; background-color: #000; }
         canvas { display: block; }
-        #info {
-            position: absolute;
-            top: 10px;
-            left: 10px;
-            padding: 10px;
-            background: rgba(0,0,0,0.7);
-            border-radius: 5px;
-            max-width: 350px;
-        }
     </style>
 </head>
 <body>
-    <div id="info">
-        Loading Three.js and initializing shaders...<br>
-        This will simulate a large number of particles entirely on the GPU.
-    </div>
-
     <script type="importmap">
         {
             "imports": {
-                "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
-                "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
+                "three": "https://esm.run/three",
+                "three/addons/": "https://esm.run/three/addons/"
             }
         }
     </script>
+    <script type="module">
+        import * as THREE from 'three';
+        import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+        import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
+        import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
+        import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
 
-<script type="module">
-    import * as THREE from 'three';
-    import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
-    import Stats from 'three/addons/libs/stats.module.js';
-    // --- THIS IS THE CORRECTED LINE ---
-    import { GPUComputationRenderer } from 'three/addons/misc/GPUComputationRenderer.js';
+        let scene, camera, renderer, controls, galaxy, composer, clock;
 
-    // --- Configuration ---
-    // The total number of particles is WIDTH * WIDTH.
-    // WARNING: Increasing this number uses exponentially more VRAM and processing power.
-    // 512 = 262,144 particles
-    // 1024 = 1,048,576 particles
-    // 2048 = 4,194,304 particles (May crash on many systems)
-    const WIDTH = 1024;
-    const PARTICLE_COUNT = WIDTH * WIDTH;
+        // --- SHADERS ---
+        const vertexShader = `
+            uniform float uTime;
+            uniform float uSize;
 
-    // --- Basic Scene Setup ---
-    const scene = new THREE.Scene();
-    const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
-    camera.position.z = 150;
+            attribute float aScale;
+            attribute vec3 aRandomness;
 
-    const renderer = new THREE.WebGLRenderer();
-    renderer.setSize(window.innerWidth, window.innerHeight);
-    document.body.appendChild(renderer.domElement);
-    
-    const controls = new OrbitControls(camera, renderer.domElement);
-    controls.enableDamping = true;
+            varying vec3 vColor;
 
-    const stats = new Stats();
-    document.body.appendChild(stats.dom);
-    
-    const infoDiv = document.getElementById('info');
-    infoDiv.innerHTML = `Simulating ${PARTICLE_COUNT.toLocaleString()} particles using GPGPU.<br>
-                         Use your mouse to rotate the camera.`;
+            void main() {
+                vec4 modelPosition = modelMatrix * vec4(position, 1.0);
 
-    let gpuCompute;
-    let positionVariable;
-    let velocityVariable;
-    let positionUniforms;
-    let velocityUniforms;
+                // Thêm dao động dọc theo trục Y cho mỗi hạt
+                float timeFactor = uTime * aRandomness.x * 0.5;
+                modelPosition.y += sin(timeFactor) * aRandomness.y * 0.15;
 
-    init();
-    animate();
+                vec4 viewPosition = viewMatrix * modelPosition;
+                vec4 projectedPosition = projectionMatrix * viewPosition;
+                gl_Position = projectedPosition;
 
-    function init() {
-        // --- GPGPU Setup ---
-        gpuCompute = new GPUComputationRenderer(WIDTH, WIDTH, renderer);
+                // Kích thước hạt, có hiệu ứng "phập phồng" nhẹ
+                float sizeWobble = sin(timeFactor * 2.0) * 0.2 + 0.8;
+                gl_PointSize = uSize * aScale * sizeWobble;
+                
+                // Bù trừ cho phối cảnh (hạt ở xa nhỏ hơn)
+                gl_PointSize *= (1.0 / -viewPosition.z);
 
-        // Check for floating point texture support
-        if (!gpuCompute.isSupported) {
-            alert('Floating point textures are not supported on your system.');
-            return;
-        }
-
-        // Create initial data textures
-        const dtPosition = gpuCompute.createTexture();
-        const dtVelocity = gpuCompute.createTexture();
-        fillInitialTextures(dtPosition, dtVelocity);
-        
-        // Add variables to the GPGPU renderer
-        positionVariable = gpuCompute.addVariable('texturePosition', computeShaderPosition, dtPosition);
-        velocityVariable = gpuCompute.addVariable('textureVelocity', computeShaderVelocity, dtVelocity);
-
-        // Set variable dependencies
-        gpuCompute.setVariableDependencies(positionVariable, [positionVariable, velocityVariable]);
-        gpuCompute.setVariableDependencies(velocityVariable, [positionVariable, velocityVariable]);
-
-        // Uniforms for the compute shaders
-        positionUniforms = positionVariable.material.uniforms;
-        velocityUniforms = velocityVariable.material.uniforms;
-
-        velocityUniforms['u_time'] = { value: 0.0 };
-        velocityUniforms['u_gravityCenter'] = { value: new THREE.Vector3() };
-
-        // Initialize GPGPU
-        const error = gpuCompute.init();
-        if (error !== null) {
-            console.error(error);
-        }
-        
-        // --- Particle Rendering Setup ---
-        const geometry = new THREE.BufferGeometry();
-        const uvs = new Float32Array(PARTICLE_COUNT * 2);
-        let p = 0;
-        for (let j = 0; j < WIDTH; j++) {
-            for (let i = 0; i < WIDTH; i++) {
-                uvs[p++] = i / (WIDTH - 1);
-                uvs[p++] = j / (WIDTH - 1);
+                vColor = color;
             }
-        }
-        geometry.setAttribute('uv', new THREE.BufferAttribute(uvs, 2));
+        `;
 
-        const particleMaterial = new THREE.ShaderMaterial({
-            uniforms: {
-                texturePosition: { value: null },
-                u_cameraPos: { value: camera.position },
-                u_pointSize: { value: 1.5 }
-            },
-            vertexShader: particleVertexShader,
-            fragmentShader: particleFragmentShader,
-            blending: THREE.AdditiveBlending,
-            depthWrite: false,
-            transparent: true,
-        });
-
-        const particles = new THREE.Points(geometry, particleMaterial);
-        scene.add(particles);
-    }
-
-    function fillInitialTextures(texturePosition, textureVelocity) {
-        const posArray = texturePosition.image.data;
-        const velArray = textureVelocity.image.data;
-        const galaxyRadius = 100;
-        const galaxyArms = 4;
-        const armSpread = 2.5;
-
-        for (let k = 0, kl = posArray.length; k < kl; k += 4) {
-            // Position
-            const radius = Math.random() * galaxyRadius;
-            const angle = (Math.floor(k / 4) % galaxyArms) * (Math.PI * 2 / galaxyArms) + (Math.random() - 0.5) * armSpread + Math.pow(radius / galaxyRadius, 2) * 5;
+        const fragmentShader = `
+            varying vec3 vColor;
+            uniform float uTime;
             
-            const x = Math.cos(angle) * radius;
-            const y = (Math.random() - 0.5) * (1 - (radius / galaxyRadius)) * 15;
-            const z = Math.sin(angle) * radius;
+            // Lấy từ vertex shader, dù không khai báo, Three.js tự hiểu
+            // attribute vec3 aRandomness; 
 
-            posArray[k + 0] = x;
-            posArray[k + 1] = y;
-            posArray[k + 2] = z;
-            posArray[k + 3] = 1.0; // w component
+            void main() {
+                // Tạo hạt hình tròn, mờ dần ở viền
+                float distanceToCenter = distance(gl_PointCoord, vec2(0.5));
+                float strength = 1.0 - (distanceToCenter * 2.0);
+                strength = pow(strength, 2.0); // Làm cho tâm sáng hơn và viền mờ nhanh hơn
 
-            // Velocity (to create the swirl)
-            const tangentialSpeed = radius * 0.1;
-            velArray[k + 0] = -z * tangentialSpeed * 0.01;
-            velArray[k + 1] = 0.0;
-            velArray[k + 2] = x * tangentialSpeed * 0.01;
-            velArray[k + 3] = 1.0; // w component
-        }
-    }
+                // Hiệu ứng lấp lánh
+                // float twinkle = sin(uTime * aRandomness.z * 5.0) * 0.5 + 0.5;
+                // twinkle = pow(twinkle, 15.0); // Tăng power để chỉ có những lúc sáng chói, còn lại thì mờ
 
-
-    function animate() {
-        requestAnimationFrame(animate);
-        const now = performance.now();
-        
-        // --- GPGPU Update ---
-        velocityUniforms['u_time'].value = now;
-        gpuCompute.compute();
-        
-        // --- Render Scene ---
-        const particleUniforms = scene.children[0].material.uniforms;
-        particleUniforms.texturePosition.value = gpuCompute.getCurrentRenderTarget(positionVariable).texture;
-        
-        controls.update();
-        stats.update();
-        renderer.render(scene, camera);
-    }
-    
-    window.addEventListener('resize', () => {
-        camera.aspect = window.innerWidth / window.innerHeight;
-        camera.updateProjectionMatrix();
-        renderer.setSize(window.innerWidth, window.innerHeight);
-    });
-
-    // --- GLSL Shaders ---
-
-    // Shader to update velocity
-    const computeShaderVelocity = /* glsl */`
-        uniform float u_time;
-        uniform vec3 u_gravityCenter;
-
-        void main() {
-            vec2 uv = gl_FragCoord.xy / resolution.xy;
-            vec3 position = texture2D(texturePosition, uv).xyz;
-            vec3 velocity = texture2D(textureVelocity, uv).xyz;
-
-            // Gravitational pull towards the center
-            vec3 direction = u_gravityCenter - position;
-            float distSq = dot(direction, direction);
-            distSq = max(distSq, 10.0); // Avoid singularity
-            vec3 gravity = normalize(direction) * (500.0 / distSq);
-
-            // Update velocity
-            vec3 newVelocity = velocity + gravity * 0.016;
-            
-            // Simple drag
-            newVelocity *= 0.99;
-
-            gl_FragColor = vec4(newVelocity, 1.0);
-        }
-    `;
-
-    // Shader to update position based on velocity
-    const computeShaderPosition = /* glsl */`
-        void main() {
-            vec2 uv = gl_FragCoord.xy / resolution.xy;
-            vec3 position = texture2D(texturePosition, uv).xyz;
-            vec3 velocity = texture2D(textureVelocity, uv).xyz;
-            
-            position += velocity * 0.16; // Multiply by delta time
-            
-            gl_FragColor = vec4(position, 1.0);
-        }
-    `;
-
-    // Shader to render the particles on screen
-    const particleVertexShader = /* glsl */`
-        uniform sampler2D texturePosition;
-        uniform float u_pointSize;
-        
-        void main() {
-            // 'uv' is a custom attribute we created to reference the texture pixel
-            vec3 pos = texture2D(texturePosition, uv).xyz;
-
-            vec4 modelViewPosition = modelViewMatrix * vec4(pos, 1.0);
-            gl_Position = projectionMatrix * modelViewPosition;
-            gl_PointSize = u_pointSize / -modelViewPosition.z;
-        }
-    `;
-    
-    const particleFragmentShader = /* glsl */`
-        void main() {
-            float dist = length(gl_PointCoord - vec2(0.5));
-            if (dist > 0.5) {
-                discard;
+                vec3 finalColor = vColor * strength; // * (twinkle + 0.2);
+                
+                gl_FragColor = vec4(finalColor, strength);
             }
-            // A nice purple-ish color that gets brighter in the center
-            gl_FragColor = vec4(0.6, 0.5, 1.0, 0.8 * (1.0 - dist * 2.0));
-        }
-    `;
+        `;
 
-</script>
+        function init() {
+            clock = new THREE.Clock();
+
+            // Scene
+            scene = new THREE.Scene();
+
+            // Camera
+            camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+            camera.position.set(4, 5, 7);
+            scene.add(camera);
+
+            // Renderer
+            const canvas = document.createElement('canvas');
+            document.body.appendChild(canvas);
+            renderer = new THREE.WebGLRenderer({
+                canvas: canvas,
+                antialias: true
+            });
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+
+            // Controls
+            controls = new OrbitControls(camera, renderer.domElement);
+            controls.enableDamping = true;
+            controls.autoRotate = true;
+            controls.autoRotateSpeed = 0.4;
+
+            // Create Galaxy
+            createGalaxy();
+
+            // Post Processing (Hậu xử lý)
+            composer = new EffectComposer(renderer);
+            const renderPass = new RenderPass(scene, camera);
+            composer.addPass(renderPass);
+
+            const bloomPass = new UnrealBloomPass(
+                new THREE.Vector2(window.innerWidth, window.innerHeight),
+                1.0, // strength: Độ mạnh của hiệu ứng lóe sáng
+                0.1, // radius: Bán kính của vầng sáng
+                0.9  // threshold: Ngưỡng độ sáng, chỉ những pixel sáng hơn ngưỡng này mới lóe
+            );
+            composer.addPass(bloomPass);
+
+            // Handle Resize
+            window.addEventListener('resize', onWindowResize, false);
+        }
+
+        function createGalaxy() {
+            const parameters = {
+                count: 300000,
+                size: 25.0, // Kích thước này giờ được điều khiển bởi uSize trong shader
+                radius: 10,
+                branches: 7,
+                spin: 1.2,
+                randomness: 0.8,
+                randomnessPower: 4,
+                insideColor: '#ff6030',
+                middleColor: '#ff9c3a',
+                outsideColor: '#3c65c4'
+            };
+
+            const geometry = new THREE.BufferGeometry();
+            const positions = new Float32Array(parameters.count * 3);
+            const colors = new Float32Array(parameters.count * 3);
+            const scales = new Float32Array(parameters.count);
+            const randomness = new Float32Array(parameters.count * 3); // Dùng cho các hiệu ứng ngẫu nhiên trong shader
+
+
+            const colorInside = new THREE.Color(parameters.insideColor);
+            const colorMiddle = new THREE.Color(parameters.middleColor);
+            const colorOutside = new THREE.Color(parameters.outsideColor);
+
+            for (let i = 0; i < parameters.count; i++) {
+                const i3 = i * 3;
+
+                // Position
+                const radius = Math.random() * parameters.radius;
+                const spinAngle = radius * parameters.spin;
+                const branchAngle = ((i % parameters.branches) / parameters.branches) * Math.PI * 2;
+
+                const randomX = Math.pow(Math.random(), parameters.randomnessPower) * (Math.random() < 0.5 ? 1 : -1) * parameters.randomness * radius;
+                const randomY = Math.pow(Math.random(), parameters.randomnessPower) * (Math.random() < 0.5 ? 1 : -1) * parameters.randomness * 0.4;
+                const randomZ = Math.pow(Math.random(), parameters.randomnessPower) * (Math.random() < 0.5 ? 1 : -1) * parameters.randomness * radius;
+
+                positions[i3 + 0] = Math.cos(branchAngle + spinAngle) * radius + randomX;
+                positions[i3 + 1] = randomY;
+                positions[i3 + 2] = Math.sin(branchAngle + spinAngle) * radius + randomZ;
+                
+                // Color
+                const mixedColor = new THREE.Color();
+                const lerpFactor = radius / parameters.radius;
+                if (lerpFactor < 0.5) {
+                    mixedColor.copy(colorInside).lerp(colorMiddle, lerpFactor * 2);
+                } else {
+                    mixedColor.copy(colorMiddle).lerp(colorOutside, (lerpFactor - 0.5) * 2);
+                }
+                colors[i3 + 0] = mixedColor.r;
+                colors[i3 + 1] = mixedColor.g;
+                colors[i3 + 2] = mixedColor.b;
+
+                // Thêm các thuộc tính ngẫu nhiên cho shader
+                scales[i] = Math.random() * 1.5 + 0.5;
+                randomness[i3 + 0] = Math.random(); // Dùng cho tốc độ dao động
+                randomness[i3 + 1] = Math.random(); // Dùng cho biên độ dao động
+                randomness[i3 + 2] = Math.random(); // Dùng cho tốc độ lấp lánh (nếu bật)
+            }
+
+            geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+            geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+            geometry.setAttribute('aScale', new THREE.BufferAttribute(scales, 1));
+            geometry.setAttribute('aRandomness', new THREE.BufferAttribute(randomness, 3));
+
+
+            // Material
+            const material = new THREE.ShaderMaterial({
+                depthWrite: false,
+                blending: THREE.AdditiveBlending,
+                vertexColors: true,
+                uniforms: {
+                    uTime: { value: 0 },
+                    uSize: { value: parameters.size }
+                },
+                vertexShader: vertexShader,
+                fragmentShader: fragmentShader
+            });
+
+            // Points
+            galaxy = new THREE.Points(geometry, material);
+            scene.add(galaxy);
+        }
+
+        function onWindowResize() {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            composer.setSize(window.innerWidth, window.innerHeight);
+            renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+            composer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+        }
+
+        function animate() {
+            const elapsedTime = clock.getElapsedTime();
+            
+            // Cập nhật uniform time cho shader
+            galaxy.material.uniforms.uTime.value = elapsedTime;
+
+            // Xoay nhẹ toàn bộ thiên hà (ngoài chuyển động của từng hạt)
+            galaxy.rotation.y = elapsedTime * 0.05;
+
+            controls.update();
+
+            // Render bằng composer thay vì renderer
+            composer.render();
+
+            requestAnimationFrame(animate);
+        }
+
+        init();
+        animate();
+    </script>
 </body>
 </html>
