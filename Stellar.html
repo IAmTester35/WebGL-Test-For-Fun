@@ -1,0 +1,289 @@
+<!DOCTYPE html>
+<html lang="vi">
+
+<head>
+    <meta charset="UTF-8">
+    <title>Lò Rèn Sao</title>
+    <style>
+        body,
+        html {
+            margin: 0;
+            overflow: hidden;
+            background-color: #000;
+        }
+
+        canvas {
+            display: block;
+        }
+
+        #info {
+            position: absolute;
+            top: 10px;
+            left: 10px;
+            color: #fff;
+            font-family: monospace;
+            font-size: 14px;
+            text-shadow: 0 0 5px #000;
+        }
+    </style>
+</head>
+
+<body>
+    <div id="info">Di chuyển chuột để điều khiển máy ảnh. Giữ chuột trái để tạo lực hấp dẫn.</div>
+    <canvas id="webgpu-canvas"></canvas>
+    <script type="module">
+        // ---- CÀI ĐẶT MÔ PHỎNG ----
+        const PARTICLE_COUNT = 25000; // 250,000 ngôi sao!
+
+        async function main() {
+            const canvas = document.getElementById('webgpu-canvas');
+            if (!navigator.gpu) {
+                throw new Error("WebGPU not supported on this browser.");
+            }
+
+            const adapter = await navigator.gpu.requestAdapter();
+            if (!adapter) {
+                throw new Error("No appropriate GPUAdapter found.");
+            }
+
+            const device = await adapter.requestDevice();
+            const context = canvas.getContext('webgpu');
+            const canvasFormat = navigator.gpu.getPreferredCanvasFormat();
+
+            canvas.width = window.innerWidth;
+            canvas.height = window.innerHeight;
+
+            context.configure({
+                device: device,
+                format: canvasFormat,
+                alphaMode: 'premultiplied',
+            });
+
+            // ---- DỮ LIỆU ----
+            // Mỗi hạt có: vị trí (vec4), vận tốc (vec4)
+            const particleData = new Float32Array(PARTICLE_COUNT * 8);
+            for (let i = 0; i < PARTICLE_COUNT; i++) {
+                const radius = Math.random() * 2.0;
+                const angle = Math.random() * Math.PI * 2;
+                const z = (Math.random() - 0.5) * 0.1;
+                const x = Math.cos(angle) * radius;
+                const y = Math.sin(angle) * radius;
+
+                // Vị trí
+                particleData[i * 8 + 0] = x;
+                particleData[i * 8 + 1] = y;
+                particleData[i * 8 + 2] = z;
+                particleData[i * 8 + 3] = Math.random(); // lifespan
+
+                // Vận tốc ban đầu để tạo xoắn ốc
+                const orbitalSpeed = Math.sqrt(1.0 / radius) * 0.1;
+                particleData[i * 8 + 4] = -y * orbitalSpeed;
+                particleData[i * 8 + 5] = x * orbitalSpeed;
+            }
+
+            const particleBufferA = device.createBuffer({
+                size: particleData.byteLength,
+                usage: GPUBufferUsage.STORAGE | GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST,
+                mappedAtCreation: true,
+            });
+            new Float32Array(particleBufferA.getMappedRange()).set(particleData);
+            particleBufferA.unmap();
+
+            const particleBufferB = device.createBuffer({
+                size: particleData.byteLength,
+                usage: GPUBufferUsage.STORAGE | GPUBufferUsage.VERTEX,
+            });
+
+            // ---- SHADERS (WGSL) ----
+            const shaderModule = device.createShaderModule({
+                code: `
+            struct Particle {
+                pos: vec4<f32>,
+                vel: vec4<f32>,
+            };
+
+            struct SimParams {
+                deltaTime: f32,
+                gravity: f32,
+                mouseX: f32,
+                mouseY: f32,
+            };
+
+            @group(0) @binding(0) var<uniform> params: SimParams;
+            @group(0) @binding(1) var<storage, read> particlesIn: array<Particle>;
+            @group(0) @binding(2) var<storage, read_write> particlesOut: array<Particle>;
+
+            @compute @workgroup_size(64)
+            fn computeMain(@builtin(global_invocation_id) global_id: vec3<u32>) {
+                let index = global_id.x;
+                if (index >= ${PARTICLE_COUNT}u) { return; }
+
+                var particle = particlesIn[index];
+                
+                // Lực hấp dẫn trung tâm
+                let center = vec3<f32>(0.0, 0.0, 0.0);
+                let dist = distance(particle.pos.xyz, center);
+                let forceDir = normalize(center - particle.pos.xyz);
+                let gravityForce = forceDir * params.gravity / (dist * dist + 0.1);
+
+                // Lực hấp dẫn từ chuột
+                let mouseForceDir = normalize(vec3<f32>(params.mouseX, params.mouseY, 0.0) - particle.pos.xyz);
+                let mouseGravity = params.gravity * 20.0; // Chuột có lực hút rất mạnh
+                let mouseDist = distance(particle.pos.xyz, vec3<f32>(params.mouseX, params.mouseY, 0.0));
+                let mouseForce = mouseForceDir * mouseGravity / (mouseDist * mouseDist + 0.1);
+
+                // Cập nhật vận tốc và vị trí
+                let totalForce = gravityForce + mouseForce;
+                particle.vel.xyz = particle.vel.xyz + totalForce * params.deltaTime;
+                particle.pos.xyz = particle.pos.xyz + particle.vel.xyz * params.deltaTime;
+
+                particlesOut[index] = particle;
+            }
+            
+            struct VSOutput {
+                @builtin(position) pos: vec4<f32>,
+                @location(0) color: vec4<f32>,
+            };
+
+            @vertex
+            fn vertexMain(@location(0) pos: vec4<f32>, @location(1) vel: vec4<f32>) -> VSOutput {
+                var output: VSOutput;
+                // Kích thước điểm phụ thuộc vận tốc
+                let speed = length(vel.xyz);
+                output.pos = vec4<f32>(pos.xyz, 1.0);
+                output.pos.z = pos.z * 10.0; // Kéo giãn độ sâu
+                // Màu sắc phụ thuộc vận tốc
+                let color_val = smoothstep(0.0, 0.02, speed);
+                output.color = mix(vec4(0.2, 0.3, 1.0, 0.1), vec4(1.0, 1.0, 0.8, 1.0), color_val);
+                return output;
+            }
+
+            @fragment
+            fn fragmentMain(@location(0) color: vec4<f32>) -> @location(0) vec4<f32> {
+                return color;
+            }
+        `,
+            });
+
+            // ---- PIPELINES ----
+            const simParamBuffer = device.createBuffer({
+                size: 4 * 4,
+                usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+            });
+
+            const computeBindGroupLayout = device.createBindGroupLayout({
+                entries: [
+                    { binding: 0, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'uniform' } },
+                    { binding: 1, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'read-only-storage' } },
+                    { binding: 2, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'storage' } },
+                ],
+            });
+
+            const computePipeline = device.createComputePipeline({
+                layout: device.createPipelineLayout({ bindGroupLayouts: [computeBindGroupLayout] }),
+                compute: { module: shaderModule, entryPoint: 'computeMain' },
+            });
+
+            const renderPipeline = device.createRenderPipeline({
+                layout: 'auto',
+                vertex: {
+                    module: shaderModule,
+                    entryPoint: 'vertexMain',
+                    buffers: [{
+                        arrayStride: 8 * 4,
+                        attributes: [
+                            { shaderLocation: 0, offset: 0, format: 'float32x4' }, // pos
+                            { shaderLocation: 1, offset: 4 * 4, format: 'float32x4' }, // vel
+                        ],
+                    }],
+                },
+                fragment: {
+                    module: shaderModule,
+                    entryPoint: 'fragmentMain',
+                    targets: [{ format: canvasFormat }],
+                },
+                primitive: { topology: 'point-list' },
+            });
+
+            // ---- VÒNG LẶP ----
+            let frame = 0;
+            const simParams = { deltaTime: 0.01, gravity: 0.0, mouseX: 0, mouseY: 0 };
+            let mousePressed = false;
+
+            window.addEventListener('mousedown', () => mousePressed = true);
+            window.addEventListener('mouseup', () => mousePressed = false);
+            window.addEventListener('mousemove', (e) => {
+                const x = (e.clientX / window.innerWidth - 0.5) * 4.0;
+                const y = -(e.clientY / window.innerHeight - 0.5) * 4.0;
+                simParams.mouseX = x;
+                simParams.mouseY = y;
+            });
+
+            function animate() {
+                simParams.gravity = mousePressed ? 0.1 : 0.0;
+
+                device.queue.writeBuffer(simParamBuffer, 0, new Float32Array([
+                    simParams.deltaTime, simParams.gravity, simParams.mouseX, simParams.mouseY
+                ]));
+
+                const bindGroupA = device.createBindGroup({
+                    layout: computeBindGroupLayout,
+                    entries: [
+                        { binding: 0, resource: { buffer: simParamBuffer } },
+                        { binding: 1, resource: { buffer: particleBufferA } },
+                        { binding: 2, resource: { buffer: particleBufferB } },
+                    ],
+                });
+                const bindGroupB = device.createBindGroup({
+                    layout: computeBindGroupLayout,
+                    entries: [
+                        { binding: 0, resource: { buffer: simParamBuffer } },
+                        { binding: 1, resource: { buffer: particleBufferB } },
+                        { binding: 2, resource: { buffer: particleBufferA } },
+                    ],
+                });
+
+                const commandEncoder = device.createCommandEncoder();
+
+                // Compute pass
+                const computePass = commandEncoder.beginComputePass();
+                computePass.setPipeline(computePipeline);
+                computePass.setBindGroup(0, frame % 2 === 0 ? bindGroupA : bindGroupB);
+                computePass.dispatchWorkgroups(Math.ceil(PARTICLE_COUNT / 64));
+                computePass.end();
+
+                // Render pass
+                const renderPass = commandEncoder.beginRenderPass({
+                    colorAttachments: [{
+                        view: context.getCurrentTexture().createView(),
+                        loadOp: 'clear',
+                        clearValue: { r: 0, g: 0, b: 0, a: 1 },
+                        storeOp: 'store',
+                    }],
+                });
+                renderPass.setPipeline(renderPipeline);
+                renderPass.setVertexBuffer(0, frame % 2 === 0 ? particleBufferB : particleBufferA);
+                renderPass.draw(PARTICLE_COUNT);
+                renderPass.end();
+
+                device.queue.submit([commandEncoder.finish()]);
+
+                frame++;
+                requestAnimationFrame(animate);
+            }
+
+            animate();
+        }
+
+        main().catch(err => {
+            console.error(err);
+            document.body.innerHTML = `<div style="color:white; font-family:monospace; padding: 20px;">
+                <h2>Lỗi Khởi Tạo WebGPU</h2>
+                <p>Trình duyệt hoặc phần cứng của bạn có thể không hỗ trợ WebGPU. Hãy thử cập nhật Google Chrome hoặc Microsoft Edge lên phiên bản mới nhất và đảm bảo bạn có một card đồ họa phù hợp.</p>
+                <p>Chi tiết lỗi: ${err.message}</p>
+            </div>`;
+        });
+    </script>
+</body>
+
+</html>

@@ -1,0 +1,212 @@
+<!DOCTYPE html>
+<html lang="vi">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Người Dệt Hư Không</title>
+    <style>
+        body {
+            margin: 0;
+            background-color: #000;
+        }
+
+        canvas {
+            display: block;
+        }
+    </style>
+</head>
+
+<body>
+    <script type="importmap">
+    {
+        "imports": {
+            "three": "https://unpkg.com/three@0.158.0/build/three.module.js",
+            "three/addons/": "https://unpkg.com/three@0.158.0/examples/jsm/"
+        }
+    }
+    </script>
+
+    <script type="module">
+        import * as THREE from 'three';
+        import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+        import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
+        import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
+        import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
+
+        // ---- CÀI ĐẶT CƠ BẢN ----
+        const scene = new THREE.Scene();
+        const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 2000);
+        camera.position.set(0, 0, 50);
+        const renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: "high-performance" });
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        document.body.appendChild(renderer.domElement);
+
+        const controls = new OrbitControls(camera, renderer.domElement);
+        controls.enableDamping = true;
+        controls.enableZoom = true;
+
+        // ---- HẬU XỬ LÝ (BLOOM) ----
+        const renderScene = new RenderPass(scene, camera);
+        const bloomPass = new UnrealBloomPass(new THREE.Vector2(window.innerWidth, window.innerHeight), 1.0, 0.1, 0.1);
+        const composer = new EffectComposer(renderer);
+        composer.addPass(renderScene);
+        composer.addPass(bloomPass);
+
+        // ---- CÁC THỰC THỂ ----
+        let echoes = [];
+        const MAX_ECHOES = 200;
+        const weaver = new Weaver();
+        const tapestry = new Tapestry();
+
+        const mouse = new THREE.Vector2();
+        const raycaster = new THREE.Raycaster();
+        const plane = new THREE.Plane(new THREE.Vector3(0, 0, 1), 0);
+
+        // ---- SỰ KIỆN ----
+        window.addEventListener('mousemove', (event) => {
+            mouse.x = (event.clientX / window.innerWidth) * 2 - 1;
+            mouse.y = -(event.clientY / window.innerHeight) * 2 + 1;
+
+            raycaster.setFromCamera(mouse, camera);
+            const intersectPoint = new THREE.Vector3();
+            raycaster.ray.intersectPlane(plane, intersectPoint);
+
+            if (Math.random() > 0.5 && echoes.length < MAX_ECHOES) {
+                echoes.push(new Echo(intersectPoint));
+            }
+        });
+
+        // ---- CÁC LỚP (CLASSES) ----
+        function Weaver() {
+            this.pos = new THREE.Vector3();
+            this.vel = new THREE.Vector3();
+            this.acc = new THREE.Vector3();
+            this.maxSpeed = 0.3;
+            this.maxForce = 0.01;
+            this.target = null;
+
+            const geometry = new THREE.IcosahedronGeometry(0.5, 2);
+            const material = new THREE.MeshBasicMaterial({ color: 0xffffff });
+            this.mesh = new THREE.Mesh(geometry, material);
+            scene.add(this.mesh);
+
+            this.seek = function (targetPos) {
+                let desired = targetPos.clone().sub(this.pos);
+                desired.setLength(this.maxSpeed);
+                let steer = desired.sub(this.vel);
+                steer.clampLength(0, this.maxForce);
+                this.acc.add(steer);
+            }
+
+            this.update = function () {
+                if (!this.target || this.target.isDead) {
+                    let closestDist = Infinity;
+                    for (let echo of echoes) {
+                        let d = this.pos.distanceTo(echo.pos);
+                        if (d < closestDist) {
+                            closestDist = d;
+                            this.target = echo;
+                        }
+                    }
+                }
+
+                if (this.target) {
+                    this.seek(this.target.pos);
+                    let d = this.pos.distanceTo(this.target.pos);
+                    if (d < 1) {
+                        tapestry.addNode(this.target.pos);
+                        this.target.isDead = true;
+                        this.target = null;
+                    }
+                }
+
+                this.vel.add(this.acc);
+                this.vel.clampLength(0, this.maxSpeed);
+                this.pos.add(this.vel);
+                this.acc.multiplyScalar(0);
+                this.mesh.position.copy(this.pos);
+            }
+        }
+
+        function Echo(position) {
+            this.pos = position.clone();
+            this.lifespan = 255;
+            this.isDead = false;
+
+            const geometry = new THREE.SphereGeometry(0.1, 8, 8);
+            const material = new THREE.MeshBasicMaterial({ color: 0x00ffff });
+            this.mesh = new THREE.Mesh(geometry, material);
+            this.mesh.position.copy(this.pos);
+            scene.add(this.mesh);
+
+            this.update = function () {
+                this.lifespan -= 0.5;
+                if (this.lifespan <= 0) {
+                    this.isDead = true;
+                }
+            }
+        }
+
+        function Tapestry() {
+            this.nodes = [];
+            const material = new THREE.LineBasicMaterial({ color: 0x6a0dad });
+            const geometry = new THREE.BufferGeometry();
+            this.mesh = new THREE.LineSegments(geometry, material);
+            scene.add(this.mesh);
+
+            this.addNode = function (position) {
+                const newNode = position.clone();
+                if (this.nodes.length > 0) {
+                    const lastNode = this.nodes[this.nodes.length - 1];
+                    this.nodes.push(lastNode, newNode); // Add a line segment
+                    this.updateGeometry();
+                } else {
+                    // First node, just store it
+                    this.nodes.push(newNode);
+                }
+            }
+
+            this.updateGeometry = function () {
+                const positions = new Float32Array(this.nodes.length * 3);
+                for (let i = 0; i < this.nodes.length; i++) {
+                    positions[i * 3] = this.nodes[i].x;
+                    positions[i * 3 + 1] = this.nodes[i].y;
+                    positions[i * 3 + 2] = this.nodes[i].z;
+                }
+                this.mesh.geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+                this.mesh.geometry.computeBoundingSphere();
+            }
+        }
+
+        // ---- VÒNG LẶP CHÍNH ----
+        function animate() {
+            requestAnimationFrame(animate);
+
+            weaver.update();
+
+            for (let i = echoes.length - 1; i >= 0; i--) {
+                echoes[i].update();
+                if (echoes[i].isDead) {
+                    scene.remove(echoes[i].mesh);
+                    echoes.splice(i, 1);
+                }
+            }
+
+            controls.update();
+            composer.render();
+        }
+
+        // ---- XỬ LÝ CỬA SỔ ----
+        window.addEventListener('resize', () => {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            composer.setSize(window.innerWidth, window.innerHeight);
+        });
+
+        animate();
+    </script>
+</body>
+
+</html>

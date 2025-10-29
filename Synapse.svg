@@ -1,0 +1,120 @@
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="100%" height="100%" viewBox="0 0 1200 800" style="background-color:#020012;">
+  <defs>
+    <radialGradient id="gradCore" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="#FFFFFF">
+        <animate attributeName="stop-color" values="#FFFFFF; #FFFF99; #FFFFFF" dur="3s" repeatCount="indefinite" />
+      </stop>
+      <stop offset="50%" stop-color="#FFDD00">
+        <animate attributeName="stop-color" values="#FFDD00; #FF9900; #FFDD00" dur="3s" repeatCount="indefinite" />
+      </stop>
+      <stop offset="100%" stop-color="#FF8800" stop-opacity="0.5"/>
+    </radialGradient>
+    
+    <filter id="glow" x="-50%" y="-50%" width="200%" height="200%">
+      <feGaussianBlur stdDeviation="10" result="coloredBlur"/>
+      <feMerge>
+        <feMergeNode in="coloredBlur"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+     <filter id="nodeGlow">
+      <feGaussianBlur stdDeviation="5" result="coloredBlur"/>
+      <feMerge>
+        <feMergeNode in="coloredBlur"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+  </defs>
+
+  <!-- Lõi trung tâm đang "thở" -->
+  <circle cx="600" cy="400" r="80" fill="url(#gradCore)" filter="url(#glow)">
+    <animate attributeName="r" dur="3s" values="75;90;75" repeatCount="indefinite" ease="in-out"/>
+  </circle>
+
+  <!-- Các xung Synapse và Nút tri thức -->
+  <g id="synapses">
+    <script type="text/javascript">
+      //<![CDATA[
+      const svgNS = "http://www.w3.org/2000/svg";
+      const container = document.getElementById("synapses");
+      const centerX = 600;
+      const centerY = 400;
+      const numNodes = 60;
+      const symbols = ['{...}', 'SQL', '∀x', 'π', 'DNA', 'C#', '♫', '画', 'λ=>', 'AI', '₿', '⚛'];
+      const colors = ['#00FFFF', '#FF00FF', '#00FF00', '#FFFF00', '#FF4500'];
+
+      for (let i = 0; i < numNodes; i++) {
+        const angle = (i / numNodes) * 2 * Math.PI;
+        const radius = 120 + Math.random() * 280;
+        const endX = centerX + radius * Math.cos(angle);
+        const endY = centerY + radius * Math.sin(angle);
+        const color = colors[i % colors.length];
+        const animDelay = Math.random() * 5;
+        const animDur = 2 + Math.random() * 3;
+
+        // Nút tri thức
+        const node = document.createElementNS(svgNS, "g");
+        const nodeCircle = document.createElementNS(svgNS, "circle");
+        nodeCircle.setAttribute("cx", endX);
+        nodeCircle.setAttribute("cy", endY);
+        nodeCircle.setAttribute("r", "15");
+        nodeCircle.setAttribute("fill", color);
+        nodeCircle.setAttribute("opacity", "0.5");
+        nodeCircle.setAttribute("filter", "url(#nodeGlow)");
+        
+        const nodeAnim = document.createElementNS(svgNS, "animate");
+        nodeAnim.setAttribute("attributeName", "r");
+        nodeAnim.setAttribute("values", "15;20;15");
+        nodeAnim.setAttribute("dur", "1s");
+        nodeAnim.setAttribute("begin", animDelay + "s");
+        nodeAnim.setAttribute("repeatCount", "indefinite");
+        nodeCircle.appendChild(nodeAnim);
+
+        const nodeText = document.createElementNS(svgNS, "text");
+        nodeText.setAttribute("x", endX);
+        nodeText.setAttribute("y", endY + 5);
+        nodeText.setAttribute("fill", "#FFF");
+        nodeText.setAttribute("font-size", "14");
+        nodeText.setAttribute("font-family", "monospace");
+        nodeText.setAttribute("text-anchor", "middle");
+        nodeText.textContent = symbols[Math.floor(Math.random() * symbols.length)];
+        
+        node.appendChild(nodeCircle);
+        node.appendChild(nodeText);
+        container.appendChild(node);
+        
+        // Đường dẫn Synapse
+        const path = document.createElementNS(svgNS, "path");
+        const pathData = `M${centerX},${centerY} Q${centerX + (endX - centerX) / 2 + (Math.random() - 0.5) * 100},${centerY + (endY - centerY) / 2 + (Math.random() - 0.5) * 100} ${endX},${endY}`;
+        path.setAttribute("d", pathData);
+        path.setAttribute("stroke", color);
+        path.setAttribute("stroke-width", "1.5");
+        path.setAttribute("fill", "none");
+        path.setAttribute("opacity", "0.6");
+        container.appendChild(path);
+
+        // Xung năng lượng chạy trên Synapse
+        const pulse = document.createElementNS(svgNS, "path");
+        pulse.setAttribute("d", pathData);
+        pulse.setAttribute("stroke", "#FFFFFF");
+        pulse.setAttribute("stroke-width", "2.5");
+        pulse.setAttribute("fill", "none");
+        pulse.setAttribute("stroke-dasharray", "10 2000"); // 10 là độ dài xung, 2000 là khoảng trống
+        
+        const pulseAnim = document.createElementNS(svgNS, "animate");
+        pulseAnim.setAttribute("attributeName", "stroke-dashoffset");
+        pulseAnim.setAttribute("from", "0");
+        pulseAnim.setAttribute("to", "-2010");
+        pulseAnim.setAttribute("dur", animDur + "s");
+        pulseAnim.setAttribute("begin", animDelay + "s");
+        pulseAnim.setAttribute("repeatCount", "indefinite");
+        pulse.appendChild(pulseAnim);
+        container.appendChild(pulse);
+      }
+      //]]>
+    </script>
+  </g>
+  <text x="600" y="780" fill="#405070" font-size="16" font-family="monospace" text-anchor="middle">
+    Chào mừng đến với Tâm trí của Máy.
+  </text>
+</svg>
